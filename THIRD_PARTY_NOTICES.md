@@ -16,7 +16,7 @@ This grant does not transfer ownership of, or create additional permissions in, 
 | nanoflann | `protassem/fitting/pareconv_src/pareconv/extensions/extra/nanoflann/nanoflann.hpp` | The bundled header contains a two-condition BSD notice. Its original copyright, conditions and disclaimer remain in that file. The header's license applies to that component, not to all of pareconv. |
 | pointops and other bundled extension code | `protassem/fitting/pareconv_src/pareconv/extensions/` | These are included with the vendored registration stack. This notice does not infer a standalone license for every extension; retain file-level notices and verify the upstream revision and terms for redistribution. |
 | US-align | `protassem/core/USalign` | A bundled executable. Its provenance and the license applicable to this particular binary revision need to be recorded separately; the CryoAssembly LGPL grant does not relicense it. |
-| VoxEM sampling executable | `protassem/sampling/Sample` | A bundled executable used for point sampling. The permission for this bundled revision has not been established by this notice. |
+| CryoAlign sampling tool | `protassem/sampling/Sample`; source attribution: [HeracleBT/CryoAlign](https://github.com/HeracleBT/CryoAlign) | The project authors identify this bundled point-sampling tool as originating from CryoAlign. The permission for this particular bundled revision still needs confirmation. |
 | DomainParser and DSSP | `protassem/assembly/domain_parser/`, including `domainparser2.LINUX` and `dssp` | The bundle includes upstream tools and an adapted wrapper. Verify the corresponding tool versions, licenses and any binary/source distribution obligations; do not infer the bundled versions' licenses from a different or newer upstream release. |
 | Model checkpoint | `protassem/fitting/parenet/weights/epoch-18.pth.tar` | Provided model artifact. This software-license addition does not establish separate rights in model weights, training inputs or datasets. |
 | Manuscript workflow illustration | `workflow.png` | Figure supplied by the CryoAssembly authors. It is documented separately from the software-license grant; this notice does not assign the image an additional content license. |
@@ -33,4 +33,4 @@ This inventory records the evidence available for the bundled components. It is 
 
 LGPL-3.0-only 仅适用于 CryoAssembly 版权持有人有权授权的原创软件贡献。第三方源码、工具二进制、模型及论文图片不会因新增本许可证而获得新的授权。
 
-当前仍需确认 PARE-Net 上游整体授权，以及所附 US-align、VoxEM、DomainParser、DSSP 等具体版本的许可与再分发条件。nanoflann 的 BSD 声明已保留在对应文件头。本文如实记录已知信息，不以论文引用、公开下载或本项目许可证替代第三方授权。
+当前仍需确认 PARE-Net 上游整体授权，以及所附 US-align、CryoAlign 采样工具、DomainParser、DSSP 等具体版本的许可与再分发条件。nanoflann 的 BSD 声明已保留在对应文件头。本文如实记录已知信息，不以论文引用、公开下载或本项目许可证替代第三方授权。

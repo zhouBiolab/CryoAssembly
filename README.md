@@ -21,7 +21,7 @@
 
 CryoAssembly fits and assembles input protein structures into cryo-electron microscopy (cryo-EM) and cryo-electron tomography (cryo-ET) density maps. It combines deep feature-based structure-to-map registration with hierarchical chain- and domain-level assembly to produce a protein complex model in mmCIF format.
 
-At its core, **CryoPARE-Net** learns geometric correspondences between structure-derived and map-derived point clouds to estimate fitting poses. Density-guided local optimization and domain-level assembly then position the input components within the map. Supply predicted or experimentally determined protein structures, a density map, its resolution and a contour level; structure prediction from sequence is outside this command-line workflow.
+**CryoPARE-Net** learns geometric correspondences between structure-derived and map-derived point clouds to estimate fitting poses. Density-guided local optimization and domain-level assembly then position the input components within the map. Input structures can be predicted or experimentally determined.
 
 | Input | Output |
 | :--- | :--- |
@@ -34,7 +34,7 @@ At its core, **CryoPARE-Net** learns geometric correspondences between structure
   <img src="workflow.png" alt="CryoAssembly workflow: density map and chain models, sliding masking and voxelization, point sampling, CryoPARE-Net fitting, local refinement and iterative assembly." width="400">
 </p>
 
-**Workflow.** Overall method illustration extracted from Fig. 1a of the associated CryoAssembly manuscript. A density map and chain models are converted to point-cloud representations for structure-to-map fitting, local refinement and iterative assembly. The current implementation accepts fitted domains; its operational details are described below and in [ALGORITHM.md](ALGORITHM.md).
+**Workflow.** Point-cloud preparation, CryoPARE-Net fitting, local refinement and hierarchical assembly (manuscript Fig. 1a).
 
 </details>
 
@@ -42,15 +42,13 @@ At its core, **CryoPARE-Net** learns geometric correspondences between structure
 
 ## Web server
 
-Use the [**CryoAssembly web server**](http://zhouxglab.com/CryoAssembly/) to submit your density map and input protein structures through a browser, without installing the local software. Follow the input instructions on the server's submission page.
-
-The hosted service and this repository are maintained separately; refer to the server for its available options and submission limits. For a local run, follow the [installation instructions](#installation) below.
+Submit your density map and protein structures through the [**CryoAssembly web server**](http://zhouxglab.com/CryoAssembly/), or use the [local installation](#installation) below.
 
 <a id="installation"></a>
 
 ## Installation
 
-Use **Linux x86_64**, an accessible NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04 with GCC/G++ 9.4 and the CUDA 11.3 toolchain; the default extension build targets Ampere GPUs such as A100/A800.
+Use **Linux x86_64**, an NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04, GCC/G++ 9.4 and CUDA 11.3.
 
 ```bash
 git clone --branch main --single-branch https://github.com/zhouBiolab/CryoAssembly.git
@@ -70,8 +68,6 @@ The installer requires an NVIDIA driver compatible with CUDA 11.3, build tools, 
 sudo apt-get install build-essential libgl1 libgomp1
 ```
 
-The installer reports missing prerequisites and stops; it does not run `apt-get` automatically.
-
 | Component | Verified baseline |
 | :--- | :--- |
 | Operating system | Ubuntu 20.04.6, Linux x86_64 |
@@ -82,9 +78,7 @@ The installer reports missing prerequisites and stops; it does not run `apt-get`
 | NumPy / Numba / llvmlite | 1.21.5 / 0.56.4 / 0.39.1 |
 | SciPy / Biopython / Open3D | 1.10.1 / 1.79 / 0.14.1 |
 
-Installation was verified on an A800 MIG `1g.10gb` allocation with 9,728 MiB visible to PyTorch. This records the tested allocation, not a universal minimum GPU-memory requirement. Input size affects memory usage. Other GPU architectures need an appropriate `TORCH_CUDA_ARCH_LIST` and are outside this recorded validation baseline.
-
-The CUDA version reported by `nvidia-smi` describes driver capability; it is different from the toolkit compiler version. The installer obtains PyTorch from the official cu113 index and validates the installed versions, extension paths and imports.
+The installer obtains PyTorch from the official cu113 index and checks package versions, extensions and imports.
 
 </details>
 
@@ -98,9 +92,9 @@ bash install.sh myenv --verify-only    # check an existing installation without 
 bash install.sh --help
 ```
 
-An existing environment is rejected unless `--skip-env` is explicit. That mode requires Python 3.8.20 and the CUDA 11.3 toolkit already present. `--verify-only` performs dependency, import and small operator checks; it does not run a full assembly job.
+Use a new environment name, or select `--skip-env` for an existing environment with Python 3.8.20 and the CUDA 11.3 toolkit. `--verify-only` checks dependencies, imports and operators.
 
-`CONDA_BASE` selects a Conda installation. `MAX_JOBS` controls extension-build workers (default 8). `PIP_INDEX_URL` and `PIP_FIND_LINKS` can select a package mirror or prepared Python wheel cache. A Python wheel cache does not replace the Conda toolkit packages.
+`CONDA_BASE` selects the Conda installation. `MAX_JOBS` sets build workers (default 8). `PIP_INDEX_URL` and `PIP_FIND_LINKS` select a Python package mirror or wheel cache.
 
 </details>
 
@@ -121,7 +115,7 @@ data_dir/
 └── contour_level.txt
 ```
 
-`resolution.txt` contains one resolution value in ångströms. `contour_level.txt` contains one density contour value appropriate for the map. The filenames above illustrate the layout; no example dataset is bundled or downloaded by these commands. Chain identifiers are read from structure contents rather than filenames.
+`resolution.txt` contains the resolution in ångströms; `contour_level.txt` contains the map contour level. Chain identifiers are read from the structure contents.
 
 ### Run the assembly
 
@@ -131,7 +125,7 @@ From the repository directory, with `cryoassembly` activated:
 python main.py data_dir --log
 ```
 
-Keep domain splitting enabled. **For structure files containing multiple chains, add `--complex-domain-opt`.** Components with no domains are rejected in the current implementation; `--no-domain-split` is therefore unsuitable for successful assembly.
+Keep domain splitting enabled. **For structure files containing multiple chains, add `--complex-domain-opt`.**
 
 ### Locate the results
 
@@ -145,7 +139,7 @@ data_dir/output/assembly/final_results/
 └── assembly_summary.txt
 ```
 
-`assembled_complex.cif` applies the final domain-level CC filter; `assembled_complex_all.cif` contains the complete accepted assembly. If produced, `refined_complex.cif` contains the refinement result. Consult the summary and log alongside the model.
+`assembled_complex.cif` is the filtered assembly, `assembled_complex_all.cif` contains all accepted components, and `refined_complex.cif` is the refinement result when generated.
 
 <details>
 <summary><strong>Manual input and an explicit output directory</strong></summary>
@@ -156,7 +150,7 @@ Manual mode accepts `.mrc` or `.map`; automatic directory mode discovers `.mrc` 
 python main.py data_dir/map.mrc data_dir 5.6 0.04 result --log
 ```
 
-Here, `5.6` and `0.04` are illustrative values; replace them with the values for your map. Manual mode does not require the two parameter text files. The final results for this command are under `result/assembly/final_results/`.
+Replace `5.6` and `0.04` with your map's resolution and contour level. Results are saved under `result/assembly/final_results/`.
 
 </details>
 
@@ -175,29 +169,29 @@ Homologous-domain refinement is enabled by default. Add `--homo-chain-refine` fo
 python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 ```
 
-Use `--no-refine` to disable the homologous-domain refinement stage. Refinement does not remove the input requirement for domain splitting.
+Use `--no-refine` to disable homologous-domain refinement.
 
 </details>
 
 <details>
 <summary><strong>Parameters and memory controls</strong></summary>
 
-| Option | CLI default | Meaning |
+| Option | Default | Meaning |
 | :--- | :---: | :--- |
-| `--chain-threshold` | 0.45 | Chain-fitting early-stop and pre-screen threshold; acceptance is per domain |
+| `--chain-threshold` | 0.45 | Chain-fitting early-stop and pre-screen threshold |
 | `--domain-threshold` | 0.45 | Initial independent-domain threshold |
 | `--complex-threshold` | 0.35 | Multi-chain template early-stop and pre-screen threshold |
-| `--domain-min-cc` | 0.35 | Nominal adaptive-threshold floor; acceptance exceptions remain |
+| `--domain-min-cc` | 0.35 | Domain-threshold adaptation floor |
 | `--complex-min-cc` | 0.25 | Final domain-level output filter |
 | `--num-processes` | 8 | Shared CPU process-pool size for scoring and local optimization |
 | `--batch-size` | 5 | Candidates accumulated per evaluation batch |
-| `--mask-radius-factor` | 1.35 | Mask radius relative to the source radius of gyration |
+| `--mask-radius-factor` | 1.35 | Mask radius relative to the source radius of gyration. Smaller masks reduce GPU memory per fit but require more fitting attempts |
 | `--min-point-distance-factor` | 0.32 | Mask-center spacing factor relative to the mask radius |
-| `--hypothesis-chunk` | 64* | Hypotheses scored per block to bound inference memory |
+| `--hypothesis-chunk` | 64 | Hypotheses scored per block to bound inference memory |
 
-*The effective hypothesis-chunk default is 64 through the runtime configuration. An explicit CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling. CPU workers and candidate batches are separate from this GPU-memory control.
+The effective hypothesis-chunk default is 64. A CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling.
 
-For the complete option list, use `python main.py --help`. See [ALGORITHM.md](ALGORITHM.md) for fitting thresholds, scheduling and acceptance exceptions. `--no-improve-accepted` is retained for compatibility but does not control the removed accepted-chain improvement path; retained retry helpers do not imply that the old retry-generation path is active.
+Use `python main.py --help` for all options and [ALGORITHM.md](ALGORITHM.md) for detailed fitting and assembly behavior.
 
 </details>
 
@@ -210,51 +204,23 @@ For the complete option list, use `python main.py --help`. See [ALGORITHM.md](AL
 3. **Assemble through chains and domains.** Chain-level fitting provides candidate poses for domain processing. Remaining domains are fitted independently, and occupied density is masked as domains are accepted.
 4. **Merge and refine.** Accepted domains are assembled into chains and a complex; homologous-domain pose reassignment uses connectivity information. Output filtering and optional refinement provide the final models.
 
-The current code uses the bundled DomainParser/DSSP tools for domain partitioning. Single-domain chains can enter domain fitting directly. Detailed runtime behavior is documented in [ALGORITHM.md](ALGORITHM.md).
+See [ALGORITHM.md](ALGORITHM.md) for the complete algorithm description.
 
 <a id="faq"></a>
 
 ## FAQ
 
 <details>
-<summary><strong>What structure inputs do I need?</strong></summary>
-
-Supply existing protein models in PDB or mmCIF format, obtained from structure prediction or experiment. This entry point does not predict a structure from a FASTA sequence. Multi-chain structure files require `--complex-domain-opt` in the current domain-based assembly implementation.
-
-</details>
-
-<details>
 <summary><strong>How should I choose the contour level?</strong></summary>
 
-Use a level appropriate for the density map, informed by its recommended contour and inspection of the density. It determines the density retained for point-cloud sampling. A value suitable for one map need not be suitable for another.
-
-</details>
-
-<details>
-<summary><strong>Why can an input component be rejected?</strong></summary>
-
-Check the log and whether domains were generated. Zero-domain components are rejected, including chains excluded by `--no-domain-split` and multi-chain templates processed without `--complex-domain-opt`. Check input preparation before changing fitting thresholds.
-
-</details>
-
-<details>
-<summary><strong>Is the minimum domain CC a hard acceptance guarantee?</strong></summary>
-
-No. Plateau and round-end selection retain paths that can accept domains below the current nominal threshold. Chain-pose and independent-domain homologous thresholds also differ. The final `--complex-min-cc` output filter is a separate step; inspect map-model agreement and the resulting structure.
+Start with the map's recommended contour level and inspect the retained density. This value controls the region sampled into the target point cloud.
 
 </details>
 
 <details>
 <summary><strong>What if GPU memory is insufficient?</strong></summary>
 
-Check the memory actually available to the process, especially on MIG devices. Hypothesis scoring is chunked by default; a smaller positive `--hypothesis-chunk` can reduce memory used by that scoring stage, but does not bound every allocation. `--num-processes` controls CPU workers. The tested GPU allocation is listed under installation requirements.
-
-</details>
-
-<details>
-<summary><strong>Where is the final model?</strong></summary>
-
-Look in `<output_dir>/assembly/final_results/`. Inspect `assembled_complex.cif`, the assembly summary and the log; if a refinement result was produced, also inspect `refined_complex.cif`. The method places input chains and domains predominantly as rigid units, so errors within an input domain can remain.
+Reduce `--mask-radius-factor` to use smaller map regions, or use a smaller positive `--hypothesis-chunk` to score fewer hypotheses at once. `--num-processes` controls CPU workers.
 
 </details>
 
@@ -264,16 +230,14 @@ Look in `<output_dir>/assembly/final_results/`. Inspect `assembled_complex.cif`,
 
 Associated manuscript: **Accurate protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**.
 
-Publication details and a verified BibTeX entry will be added when available.
-
 <a id="license"></a>
 
 ## License
 
-The original software contributions of the CryoAssembly copyright holders are licensed under the **GNU Lesser General Public License, version 3.0 only (LGPL-3.0-only)**. See [LICENSE](LICENSE) and the incorporated [GNU GPL version 3 terms](licenses/GPL-3.0.txt).
-
-Third-party code, bundled executables and model artifacts are not relicensed by this grant. Their provenance, retained notices and unresolved upstream permissions are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This statement grants rights only in the original contributions that the CryoAssembly copyright holders have authority to license.
+Original CryoAssembly contributions are licensed under **LGPL-3.0-only**. See [LICENSE](LICENSE), the incorporated [GPL v3 terms](licenses/GPL-3.0.txt) and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgements
 
-CryoPARE-Net builds on PARE-Net and related point-cloud registration components. The implementation includes `pareconv` and `pointops`, US-align, the VoxEM sampling executable, DomainParser and DSSP. Please acknowledge and cite the relevant original methods when appropriate, and consult the original components for attribution and applicable licensing terms.
+We thank the authors of [PARE-Net](https://github.com/yaorz97/PARENet) and [GeoTransformer](https://github.com/qinzheng93/GeoTransformer) for the registration framework and components used by CryoPARE-Net.
+
+The assembly pipeline also uses **US-align** for structural alignment, [**CryoAlign**](https://github.com/HeracleBT/CryoAlign)'s `Sample` tool for point sampling, **DomainParser** for domain partitioning and **DSSP** for secondary-structure assignment. We thank the developers of these tools.

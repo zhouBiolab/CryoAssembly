@@ -1,6 +1,8 @@
 <div align="center">
 
-# CryoAssembly
+<p align="center">
+  <img src="docs/assets/cryoassembly-logo.png" alt="CryoAssembly" width="640">
+</p>
 
 **通过几何对应学习，从 cryo-EM 和 cryo-ET 密度图中装配蛋白结构**
 
@@ -26,17 +28,6 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 | 输入 | 输出 |
 | :--- | :--- |
 | 密度图、蛋白结构模型、分辨率和轮廓阈值 | 装配后的复合物模型（`.cif`）与装配摘要 |
-
-<details open>
-<summary><strong>查看方法流程图</strong></summary>
-
-<p align="center">
-  <img src="workflow.png" alt="CryoAssembly 总体流程：密度图与链模型、滑动掩码与体素化、点云采样、CryoPARE-Net 拟合、局部优化及迭代装配。" width="400">
-</p>
-
-**总体流程。** 点云准备、CryoPARE-Net 拟合、局部优化和分层装配（正文 Fig. 1a）。
-
-</details>
 
 <a id="web-server"></a>
 

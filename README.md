@@ -1,6 +1,8 @@
 <div align="center">
 
-# CryoAssembly
+<p align="center">
+  <img src="docs/assets/cryoassembly-logo.png" alt="CryoAssembly" width="640">
+</p>
 
 **Protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**
 
@@ -26,17 +28,6 @@ CryoAssembly fits and assembles input protein structures into cryo-electron micr
 | Input | Output |
 | :--- | :--- |
 | Density map, protein structure models, resolution and contour level | Assembled complex models (`.cif`) and an assembly summary |
-
-<details open>
-<summary><strong>View the workflow</strong></summary>
-
-<p align="center">
-  <img src="workflow.png" alt="CryoAssembly workflow: density map and chain models, sliding masking and voxelization, point sampling, CryoPARE-Net fitting, local refinement and iterative assembly." width="400">
-</p>
-
-**Workflow.** Point-cloud preparation, CryoPARE-Net fitting, local refinement and hierarchical assembly (manuscript Fig. 1a).
-
-</details>
 
 <a id="web-server"></a>
 

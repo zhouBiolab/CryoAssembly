@@ -182,7 +182,7 @@ Use `--no-refine` to disable homologous-domain refinement.
 
 The effective hypothesis-chunk default is 64. A CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling.
 
-Use `python main.py --help` for all options and [ALGORITHM.md](ALGORITHM.md) for detailed fitting and assembly behavior.
+Use `python main.py --help` for all options.
 
 </details>
 
@@ -195,7 +195,6 @@ Use `python main.py --help` for all options and [ALGORITHM.md](ALGORITHM.md) for
 3. **Assemble through chains and domains.** Chain-level fitting provides candidate poses for domain processing. Remaining domains are fitted independently, and occupied density is masked as domains are accepted.
 4. **Merge and refine.** Accepted domains are assembled into chains and a complex; homologous-domain pose reassignment uses connectivity information. Output filtering and optional refinement provide the final models.
 
-See [ALGORITHM.md](ALGORITHM.md) for the complete algorithm description.
 
 <a id="faq"></a>
 

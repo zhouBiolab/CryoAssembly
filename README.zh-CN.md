@@ -182,7 +182,7 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 
 位姿假设分块的有效默认值为 64。显式 CLI 值优先于 `--runtime-config`；设为 `0` 会关闭假设分块，保留查询分块。
 
-使用 `python main.py --help` 查看完整选项，详细拟合和装配行为见 [ALGORITHM.md](ALGORITHM.md)。
+使用 `python main.py --help` 查看完整选项。
 
 </details>
 
@@ -195,7 +195,6 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 3. **通过链和域完成分层装配。** 链级拟合为域处理提供候选姿态，剩余域独立拟合；接受域时掩蔽其占据的密度区域。
 4. **合并与精修。** 将已接受的域合并成链和复合物；同源域姿态重分配利用连接信息，随后通过输出过滤和可选精修生成最终模型。
 
-完整算法说明见 [ALGORITHM.md](ALGORITHM.md)。
 
 <a id="faq"></a>
 

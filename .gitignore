@@ -40,7 +40,7 @@ geo_test.py
 
 # ---------------------------------------------------------------------------
 # Internal development documents
-# Public documentation: README.md, README.zh-CN.md and ALGORITHM.md
+# Public documentation: README.md and README.zh-CN.md
 # ---------------------------------------------------------------------------
 PROJECT_ARCHITECTURE.md
 ENGINEERING_HARDENING_PLAN.md
@@ -69,3 +69,4 @@ SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
 /protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver/tran_cif.py
 /protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver_norm/dele.py
 /check_clash.py
+/ALGORITHM.md

@@ -238,6 +238,6 @@ CryoAssembly 的原创贡献采用 **LGPL-3.0-only**。完整条款见 [LICENSE]
 
 ## 致谢
 
-感谢 [PARE-Net](https://github.com/yaorz97/PARENet) 和 [GeoTransformer](https://github.com/qinzheng93/GeoTransformer) 的作者，为 CryoPARE-Net 提供配准框架与相关组件。
+感谢 [PARE-Net](https://github.com/yaorz97/PARENet)、[GeoTransformer](https://github.com/qinzheng93/GeoTransformer) 和 [UGP](https://github.com/peakpang/UGP) 的作者，其配准方法、相关组件与设计思路为 CryoPARE-Net 提供了基础和启发。
 
 组装流程还使用 **US-align** 进行结构比对、[**CryoAlign**](https://github.com/HeracleBT/CryoAlign) 的 `Sample` 工具进行点云采样、**DomainParser** 进行域划分、**DSSP** 进行二级结构识别。感谢这些工具的开发者。

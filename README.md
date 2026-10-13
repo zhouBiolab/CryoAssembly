@@ -238,6 +238,6 @@ Original CryoAssembly contributions are licensed under **LGPL-3.0-only**. See [L
 
 ## Acknowledgements
 
-We thank the authors of [PARE-Net](https://github.com/yaorz97/PARENet) and [GeoTransformer](https://github.com/qinzheng93/GeoTransformer) for the registration framework and components used by CryoPARE-Net.
+We thank the authors of [PARE-Net](https://github.com/yaorz97/PARENet), [GeoTransformer](https://github.com/qinzheng93/GeoTransformer) and [UGP](https://github.com/peakpang/UGP) for the registration methods, components and design ideas that informed CryoPARE-Net.
 
 The assembly pipeline also uses **US-align** for structural alignment, [**CryoAlign**](https://github.com/HeracleBT/CryoAlign)'s `Sample` tool for point sampling, **DomainParser** for domain partitioning and **DSSP** for secondary-structure assignment. We thank the developers of these tools.

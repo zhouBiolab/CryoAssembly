@@ -39,12 +39,12 @@ class AssemblyOrchestrator:
 
     def __init__(self, target_txt, source_dir, density_mrc,
                  resolution, contour, output_dir=None,
-                 chain_threshold=0.40, initial_domain_threshold=0.40,
+                 chain_threshold=0.45, initial_domain_threshold=0.45,
                  min_domain_threshold=0.35, similarity_threshold=0.85,
                  complex_threshold=0.35, complex_domain_opt=False,
                  improve_accepted=True, domain_opt=True,
                  save_all_attempts=False, cleanup=False, num_processes=1,
-                 batch_size=8, mask_radius_factor=1.35,
+                 batch_size=5, mask_radius_factor=1.35,
                  min_point_distance_factor=0.32,
                  complex_min_cc=0.15, do_refine=True,
                  refine_tm=0.75, homo_chain_refine=False,
@@ -104,6 +104,7 @@ class AssemblyOrchestrator:
         self.accepted_domain_pdbs = []        # 已接受域的 CIF 路径（计数/切片/refine 用）
         self.accepted_domain_src_pdbs = []    # 对应模板 PDB 路径（相似判定，与 TM 缓存同键）
         self.accepted_domain_groups = set()   # 已接受域的 group_id 集合（同源查表 O(1)）
+        self.accepted_domain_group_ccs = {}   # group_id -> [已接受域的 cc]（动态阈值分档用）
         self.accepted_fitted_pdbs = []        # 已接受结构(链+域)的拟合 pose PDB（clash 检测用）
         self.excluded_domains = []
         self.input_count = 0        # _prepare_chains 看到的输入文件数
@@ -231,6 +232,12 @@ class AssemblyOrchestrator:
         structure_files = (list(self.source_dir.glob("*.pdb"))
                            + list(self.source_dir.glob("*.cif")))
         self.input_count = len(structure_files)
+
+        # 2026-09-30：输入链号去重用的"已占用"集合 + 编号池。
+        # 复用 complex_builder 里那套 A-Z / a-z / 0-9（及两字符组合）的分配器，
+        # 保证重编号后仍在合法的 PDB 链号空间内。
+        from protassem.assembly.complex_builder import _next_available_id
+        _used_chain_ids = set()
         for sf in structure_files:
             ext = sf.suffix.lower()
             is_complex = sf.name.startswith("complex_")
@@ -247,6 +254,20 @@ class AssemblyOrchestrator:
                 chain_id = "+".join(chain_ids)
             else:
                 chain_id = chain_ids[0]
+
+            # 2026-09-30：用户的不同输入文件里可能写着相同的链号（例如两个文件都含链 A）。
+            # 内部一切主键（chain_records / domain_records / accepted_groups /
+            # needs_domain_assembly / chain_map）都按 chain_id 索引，重号会让两条链
+            # 互相覆盖，甚至少装配一条链。这里在入口处去重：冲突时改用编号池中
+            # 下一个未被占用的 ID。
+            # 最终输出的链号本就不由输入决定（complex_builder 会重新分配），
+            # 因此这次重编号对用户看到的结果没有影响。
+            if chain_id in _used_chain_ids:
+                _new_id = _next_available_id(_used_chain_ids)
+                log.warning("输入链号重复：%s 的链号 %r 与已有输入冲突，内部重编号为 %r",
+                            sf.name, chain_id, _new_id)
+                chain_id = _new_id
+            _used_chain_ids.add(chain_id)
 
             chain_map = None
             if ext == ".cif":
@@ -494,26 +515,30 @@ class AssemblyOrchestrator:
             cc = rec["pre_screen_cc"]
             cid = rec["chain_id"]
 
-            if self.improve_accepted and len(self.domain_records.get(cid, [])) > 1:
-                from protassem.assembly.chain_fitter import try_improve_chain_with_domains
-                improved_pdb, improved_cc = try_improve_chain_with_domains(
-                    self, rec, rec["pdb_file"], cc)
-                if improved_cc > cc:
-                    log.info("  %s improved by domains: %.4f -> %.4f",
-                             cid, cc, improved_cc)
-                    cc = improved_cc
-                    rec["fitted_pdb"] = improved_pdb
+            # 2026-09-30（只接受达标结构域）：预筛通过也不再整链接受。
+            # 预筛路径原先直接 _accept_chain + 把该链所有域标 rejected，与新语义冲突；
+            # 现在与链拟合路径一致：拿预筛得到的姿态做逐域局部优化，只接受达标域，
+            # 未达标的域保持 available，交给后续域拟合。
+            domains = self.domain_records.get(cid, [])
+            success = False
+            if self.domain_opt and len(domains) > 1:
+                from protassem.assembly.chain_fitter import try_domains_via_chain_pose
+                success = try_domains_via_chain_pose(self, rec, rec["pdb_file"])
 
             rec["cc_mask"] = cc
             if not rec.get("fitted_pdb"):
                 rec["fitted_pdb"] = rec["pdb_file"]
-            self._accept_chain(rec, rec["fitted_pdb"], cc)
-            self._mask_region(rec["fitted_pdb"])
 
-            for d in self.domain_records.get(cid, []):
-                d["status"] = "rejected"
+            if cid not in self.needs_domain_assembly:
+                self.needs_domain_assembly.append(cid)
 
-            log.info("Pre-screen ACCEPTED: %s (cc=%.4f)", cid, cc)
+            if success:
+                # 有域达标 <=> 这条链能拟合
+                rec["status"] = "accepted_via_domains"
+                log.info("Pre-screen ACCEPTED via domains: %s (pre_cc=%.4f)", cid, cc)
+            else:
+                rec["status"] = "needs_domain_assembly"
+                log.info("Pre-screen NOT accepted (no domain passed): %s (pre_cc=%.4f)", cid, cc)
 
         remaining = sum(1 for r in self.chain_records if r["status"] == "pending")
         log.info("Pre-screening complete: %d accepted, %d remaining for fitting",
@@ -641,6 +666,7 @@ class AssemblyOrchestrator:
         gid = drec.get("group_id")
         if gid is not None:
             self.accepted_domain_groups.add(gid)
+            self.accepted_domain_group_ccs.setdefault(gid, []).append(cc)
 
     def _record_excluded_domain(self, chain_id, dkey, cc):
         log.info("Domain %s excluded from assembly (cc=%.4f < %.3f)",

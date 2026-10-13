@@ -343,25 +343,29 @@ def _hybrid_score(cc, overlap):
 
 def _select_final_result(all_results, candidates, density_mrc, resolution,
                          contour, stop_threshold, temp_dir, context=None):
-    """No early stop: among files not yet optimized, optimize the top 5 by CC
-    plus the top 5 by hybrid score (non-overlapping), then pick the best overall.
+    """No early stop: among files not yet optimized, optimize the top 10 by CC
+    plus the top 10 by hybrid score (non-overlapping), then pick the best overall.
+
+    cc_mask 低于 LOCAL_OPT_CC_FLOOR 的候选不做局部优化（与 evaluate_batch 同门槛）。
     """
     valid_r = [r for r in all_results if r["cc_mask"] is not None]
     if not valid_r:
         return None
 
     optimized_files = {c.get("pdb_file") for c in candidates}
-    unopt = [r for r in valid_r if r["pdb_file"] not in optimized_files]
+    unopt = [r for r in valid_r
+             if r["pdb_file"] not in optimized_files
+             and r["cc_mask"] >= LOCAL_OPT_CC_FLOOR]
     for r in unopt:
         r["hybrid"] = _hybrid_score(r["cc_mask"], r.get("overlap", 0))
 
-    # 1) top 5 by CC_mask（并列用候选 id 作稳定次序）
-    by_cc = sorted(unopt, key=lambda r: (-r["cc_mask"], r.get("candidate_id", 0)))[:5]
+    # 1) top 10 by CC_mask（并列用候选 id 作稳定次序）
+    by_cc = sorted(unopt, key=lambda r: (-r["cc_mask"], r.get("candidate_id", 0)))[:10]
     chosen = {r["pdb_file"] for r in by_cc}
-    # 2) top 5 by hybrid score, excluding files already picked by CC
+    # 2) top 10 by hybrid score, excluding files already picked by CC
     by_hybrid = [r for r in sorted(unopt,
                                    key=lambda r: (-r["hybrid"], r.get("candidate_id", 0)))
-                 if r["pdb_file"] not in chosen][:5]
+                 if r["pdb_file"] not in chosen][:10]
     picks = by_cc + by_hybrid
     log.info("Final optimization: %d by CC + %d by hybrid (non-overlapping)",
              len(by_cc), len(by_hybrid))

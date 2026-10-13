@@ -1,328 +1,260 @@
-# protassem -- Protein Structure Assembly Pipeline
+<div align="center">
 
-**English** | [简体中文](README.zh-CN.md)
+# CryoAssembly
 
-Given an experimental density map and one or more chain structures, protassem
-performs voxelisation, point-cloud sampling, PARE-Net registration and fitting,
-unified-queue assembly, and refinement. The final output is an assembled
-macromolecular complex in CIF format.
+**Protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**
+
+![Platform: Linux x86_64](https://img.shields.io/badge/platform-Linux_x86__64-347D83)
+![Python: 3.8](https://img.shields.io/badge/Python-3.8-347D83)
+![CUDA: 11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
+
+**English** · [简体中文](README.zh-CN.md)
+
+[Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation)
+
+</div>
+
+## Overview
+
+CryoAssembly fits and assembles input protein structures into cryo-electron microscopy (cryo-EM) and cryo-electron tomography (cryo-ET) density maps. It combines deep feature-based structure-to-map registration with hierarchical chain- and domain-level assembly to produce a protein complex model in mmCIF format.
+
+At its core, **CryoPARE-Net** learns geometric correspondences between structure-derived and map-derived point clouds to estimate fitting poses. Density-guided local optimization and domain-level assembly then position the input components within the map. Supply predicted or experimentally determined protein structures, a density map, its resolution and a contour level; structure prediction from sequence is outside this command-line workflow.
+
+| Input | Output |
+| :--- | :--- |
+| Density map, protein structure models, resolution and contour level | Assembled complex models (`.cif`) and an assembly summary |
+
+<details>
+<summary><strong>View the workflow</strong></summary>
+
+<p align="center">
+  <img src="docs/assets/workflow.png" alt="CryoAssembly workflow: density map and chain models, sliding masking and voxelization, point sampling, CryoPARE-Net fitting, local refinement and iterative assembly." width="400">
+</p>
+
+**Workflow.** Overall method illustration extracted from Fig. 1a of the associated CryoAssembly manuscript. A density map and chain models are converted to point-cloud representations for structure-to-map fitting, local refinement and iterative assembly. The current implementation accepts fitted domains; its operational details are described below and in [ALGORITHM.md](ALGORITHM.md).
+
+</details>
+
+<a id="installation"></a>
+
+## Installation
+
+Use **Linux x86_64**, an accessible NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04 with GCC/G++ 9.4 and the CUDA 11.3 toolchain; the default extension build targets Ampere GPUs such as A100/A800.
+
+```bash
+git clone --branch main --single-branch https://github.com/zhouBiolab/CryoAssembly.git
+cd CryoAssembly
+bash install.sh
+conda activate cryoassembly
+```
+
+The installer creates a separate `cryoassembly` environment, installs the pinned dependencies and builds the bundled `pareconv` and `pointops` extensions. `requirements.txt` is the single Python dependency definition.
+
+<details>
+<summary><strong>System requirements and verified environment</strong></summary>
+
+The installer requires an NVIDIA driver compatible with CUDA 11.3, build tools, `libGL.so.1` and `libgomp.so.1`. On Ubuntu 20.04, install missing system packages before running it:
+
+```bash
+sudo apt-get install build-essential libgl1 libgomp1
+```
+
+The installer reports missing prerequisites and stops; it does not run `apt-get` automatically.
+
+| Component | Verified baseline |
+| :--- | :--- |
+| Operating system | Ubuntu 20.04.6, Linux x86_64 |
+| Compiler | GCC/G++ 9.4.0 |
+| Python | 3.8.20 |
+| PyTorch | 1.10.0+cu113 |
+| CUDA toolkit / nvcc | 11.3.1 / 11.3.122 |
+| NumPy / Numba / llvmlite | 1.21.5 / 0.56.4 / 0.39.1 |
+| SciPy / Biopython / Open3D | 1.10.1 / 1.79 / 0.14.1 |
+
+Installation was verified on an A800 MIG `1g.10gb` allocation with 9,728 MiB visible to PyTorch. This records the tested allocation, not a universal minimum GPU-memory requirement. Input size affects memory usage. Other GPU architectures need an appropriate `TORCH_CUDA_ARCH_LIST` and are outside this recorded validation baseline.
+
+The CUDA version reported by `nvidia-smi` describes driver capability; it is different from the toolkit compiler version. The installer obtains PyTorch from the official cu113 index and validates the installed versions, extension paths and imports.
+
+</details>
+
+<details>
+<summary><strong>Environment selection and installation checks</strong></summary>
+
+```bash
+bash install.sh myenv                  # create a new environment
+bash install.sh myenv --skip-env       # install dependencies and rebuild in an existing environment
+bash install.sh myenv --verify-only    # check an existing installation without installing or building
+bash install.sh --help
+```
+
+An existing environment is rejected unless `--skip-env` is explicit. That mode requires Python 3.8.20 and the CUDA 11.3 toolkit already present. `--verify-only` performs dependency, import and small operator checks; it does not run a full assembly job.
+
+`CONDA_BASE` selects a Conda installation. `MAX_JOBS` controls extension-build workers (default 8). `PIP_INDEX_URL` and `PIP_FIND_LINKS` can select a package mirror or prepared Python wheel cache. A Python wheel cache does not replace the Conda toolkit packages.
+
+</details>
+
+<a id="usage"></a>
+
+## Usage
+
+### Prepare the inputs
+
+Create a directory containing your map and protein structures:
 
 ```text
-density map (.mrc) + chain structures (.pdb/.cif)
-    -> voxelisation -> point sampling -> fitting and assembly -> refinement
-    -> assembled complex (.cif)
+data_dir/
+├── map.mrc
+├── model_A.pdb
+├── model_B.cif
+├── resolution.txt
+└── contour_level.txt
 ```
 
-## Requirements
+`resolution.txt` contains one resolution value in ångströms. `contour_level.txt` contains one density contour value appropriate for the map. The filenames above illustrate the layout; no example dataset is bundled or downloaded by these commands. Chain identifiers are read from structure contents rather than filenames.
 
-### Python environment
+### Run the assembly
+
+From the repository directory, with `cryoassembly` activated:
 
 ```bash
-conda create -n point python=3.8
-conda activate point
-pip install -r requirements.txt
+python main.py data_dir --log
 ```
 
-### pareconv
+Keep domain splitting enabled. **For structure files containing multiple chains, add `--complex-domain-opt`.** Components with no domains are rejected in the current implementation; `--no-domain-split` is therefore unsuitable for successful assembly.
 
-PARE-Net inference depends on `pareconv`, including its CUDA extensions. The
-source is included under `protassem/fitting/pareconv_src/` and must be compiled
-on the target machine:
+### Locate the results
 
-```bash
-cd protassem/fitting/pareconv_src
-pip install -e .
-cd pareconv/extensions/pointops/
-python setup.py install
-```
-
-Compilation requires a compatible PyTorch installation (for example,
-PyTorch 1.10.0 with CUDA 11.3), `nvcc`, and `gcc/g++`.
-
-Verify the installation with:
-
-```bash
-python -c "import torch; import pointops_cuda; from pareconv.modules.ops import index_select; print('OK')"
-```
-
-### Bundled executables
-
-The repository includes the executables used by the pipeline. Grant execute
-permission once on Linux:
-
-```bash
-chmod +x protassem/core/USalign
-chmod +x protassem/sampling/Sample
-chmod +x protassem/assembly/domain_parser/domainparser2.LINUX
-chmod +x protassem/assembly/domain_parser/dssp
-```
-
-### Model weights
-
-The PARE-Net checkpoint `epoch-18.pth.tar` is included under
-`protassem/fitting/parenet/weights/`.
-
-## Running the pipeline
-
-### Quick test
-
-The repository does not ship with sample data (`example2` is not part of it).
-Point the entry point at any data directory containing a density map (`.mrc`),
-structure files (`.pdb`/`.cif`), `resolution.txt` and `contour_level.txt`:
-
-```bash
-cd /xiangyux/claude_c_work/demo_reg
-python main.py <data_dir> --log
-```
-
-The output is written to `<data_dir>/output/`:
+The default output directory is beside the input map. The main result files are:
 
 ```text
-example2/output/
-+-- pipeline_<timestamp>.log
-+-- voxelized/
-+-- sampled/
-+-- sampled_sources/
-+-- assembly/
-    +-- final_results/
-    |   +-- assembled_complex.cif       filtered final complex
-    |   +-- assembled_complex_all.cif   complete accepted assembly
-    |   +-- refined_complex.cif         Step 4 result, when triggered
-    |   +-- assembly_summary.txt
-    |   +-- chains/
-    |   +-- domain_chains/
-    +-- work/                           intermediate files
+data_dir/output/assembly/final_results/
+├── assembled_complex.cif
+├── assembled_complex_all.cif
+├── refined_complex.cif          # when refinement produces a result
+└── assembly_summary.txt
 ```
 
-### Automatic mode
+`assembled_complex.cif` applies the final domain-level CC filter; `assembled_complex_all.cif` contains the complete accepted assembly. If produced, `refined_complex.cif` contains the refinement result. Consult the summary and log alongside the model.
 
-Place the following files in a data directory:
+<details>
+<summary><strong>Manual input and an explicit output directory</strong></summary>
 
-- density maps in `.mrc` format;
-- chain structures in `.pdb` or `.cif` format;
-- `resolution.txt`;
-- `contour_level.txt`.
-
-Run:
+Manual mode accepts `.mrc` or `.map`; automatic directory mode discovers `.mrc` only. Specify the map, structure directory, resolution, contour level and optional output directory:
 
 ```bash
-python main.py <data_dir> --log
+python main.py data_dir/map.mrc data_dir 5.6 0.04 result --log
 ```
 
-The pipeline reads chain identifiers from the structure contents rather than
-from filenames. Multichain inputs are preserved as complexes. Duplicate chain
-identifiers are automatically remapped to unique identifiers. CIF output is
-used when more than 52 chain identifiers are required.
+Here, `5.6` and `0.04` are illustrative values; replace them with the values for your map. Manual mode does not require the two parameter text files. The final results for this command are under `result/assembly/final_results/`.
 
-### Manual mode
+</details>
+
+<details>
+<summary><strong>Multi-chain inputs and refinement options</strong></summary>
+
+For a template containing multiple chains:
 
 ```bash
-python main.py <density.mrc> <struct_dir> <resolution> <contour> [output_dir] --log
+python main.py data_dir --complex-domain-opt --log
 ```
 
-## Command-line options
-
-### Switches
-
-| Option | Default | Description |
-|---|---:|---|
-| `--log` | off | Write a timestamped pipeline log to the output directory. |
-| `--log-file <path>` | none | Write the log to an explicit path. |
-| `--no-improve-accepted` | off | Disable per-domain local refinement after a chain is accepted. |
-| `--no-domain-opt` | off | Disable domain-optimisation fallback for chains that do not pass the chain threshold. |
-| `--complex-domain-opt` | off | Split complex inputs into chains, fit domains, and compare merged chain results. |
-| `--homo-chain-refine` | off | Enable Step 5 homologous-chain refinement. |
-| `--no-pre-screen` | off | Disable the pre-assembly parallel screening of the original poses. |
-| `--save-all-attempts` | off | Save every fitting attempt for debugging. |
-| `--cleanup` | off | Remove temporary `work/` directories after completion. |
-| `--no-domain-split <ids>` | none | Keep selected chain IDs intact, for example `--no-domain-split A,B`. |
-| `--no-refine` | off | Disable Step 4 homologous-domain refinement. |
-
-### Numeric parameters
-
-| Option | Default | Description |
-|---|---:|---|
-| `--chain-threshold` | 0.40 | Acceptance threshold for ordinary chains. |
-| `--complex-threshold` | 0.35 | Acceptance threshold for complexes. |
-| `--domain-threshold` | 0.40 | Initial threshold for domain fitting. |
-| `--domain-min-cc` | 0.35 | Absolute lower bound for domain acceptance. |
-| `--complex-min-cc` | 0.25 | Final confidence filter for components in the assembled complex. |
-| `--similarity-threshold` | 0.85 | TM-score threshold for chain/domain similarity. |
-| `--refine-tm` | 0.75 | TM-score threshold for Step 4 homologous-domain grouping. |
-| `--num-processes` | 8 | Number of parallel processes for CC calculation and local optimisation. |
-| `--batch-size` | 8 | Number of predictions accumulated before monitoring evaluation. |
-| `--mask-radius-factor` | 1.35 | PARENet mask radius as a scale of the gyration radius. |
-| `--min-point-distance-factor` | 0.32 | Minimum point spacing inside the mask, in mask radii. |
-
-### Runtime configuration
-
-`--runtime-config <path>` takes a JSON object that overrides the runtime
-defaults. Unknown keys are rejected, so a typo fails loudly instead of being
-silently ignored.
+Homologous-domain refinement is enabled by default. Add `--homo-chain-refine` for the optional subsequent homologous-chain refinement stage:
 
 ```bash
-python main.py <density.mrc> <struct_dir> <resolution> <contour> \
-    --runtime-config runtime.json
+python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 ```
 
-```json
-{"inference_mode": "joint", "allow_tf32": true, "hypothesis_chunk": 64, "tail_pipeline": false}
-```
+Use `--no-refine` to disable the homologous-domain refinement stage. Refinement does not remove the input requirement for domain splitting.
 
-| Key | Default | Description |
-|---|---:|---|
-| `inference_mode` | `joint` | Registration inference mode. |
-| `allow_tf32` | `null` | TF32 policy; `null` derives it from `inference_mode`. |
-| `hypothesis_chunk` | `64` | Pose hypotheses scored per chunk. Chunking bounds the peak memory of registration; `0` disables it and restores the previous memory profile. |
-| `tail_pipeline` | `false` | Enable the tail-pipelined scheduling path. |
+</details>
 
-**Memory.** `hypothesis_chunk=64` is the default and is the main reason the
-registration path now peaks far below its previous footprint (measured on
-test/1-4 with `nvidia-smi`: 44.5%-59.8% lower peak, with the same accepted
-components). On large inputs the model also tiles its convolution queries at
-1024 points, which is output-equivalent but only engages when a stage carries
-more than 1024 query points.
+<details>
+<summary><strong>Parameters and memory controls</strong></summary>
 
-## Examples
+| Option | CLI default | Meaning |
+| :--- | :---: | :--- |
+| `--chain-threshold` | 0.45 | Chain-fitting early-stop and pre-screen threshold; acceptance is per domain |
+| `--domain-threshold` | 0.45 | Initial independent-domain threshold |
+| `--complex-threshold` | 0.35 | Multi-chain template early-stop and pre-screen threshold |
+| `--domain-min-cc` | 0.35 | Nominal adaptive-threshold floor; acceptance exceptions remain |
+| `--complex-min-cc` | 0.25 | Final domain-level output filter |
+| `--num-processes` | 8 | Shared CPU process-pool size for scoring and local optimization |
+| `--batch-size` | 5 | Candidates accumulated per evaluation batch |
+| `--mask-radius-factor` | 1.35 | Mask radius relative to the source radius of gyration |
+| `--min-point-distance-factor` | 0.32 | Mask-center spacing factor relative to the mask radius |
+| `--hypothesis-chunk` | 64* | Hypotheses scored per block to bound inference memory |
 
-Run with default settings:
+*The effective hypothesis-chunk default is 64 through the runtime configuration. An explicit CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling. CPU workers and candidate batches are separate from this GPU-memory control.
 
-```bash
-python main.py example2
-```
+For the complete option list, use `python main.py --help`. See [ALGORITHM.md](ALGORITHM.md) for fitting thresholds, scheduling and acceptance exceptions. `--no-improve-accepted` is retained for compatibility but does not control the removed accepted-chain improvement path; retained retry helpers do not imply that the old retry-generation path is active.
 
-Recommended production configuration:
+</details>
 
-```bash
-python main.py <data_dir> --log --homo-chain-refine
-```
+<a id="method"></a>
 
-For complex inputs:
+## Method
 
-```bash
-python main.py <data_dir> --log \
-  --complex-threshold 0.35 \
-  --complex-domain-opt
-```
+1. **Represent structures and maps as point clouds.** Voxelization, sampling and sliding map masks prepare local structure-to-map registration pairs.
+2. **Estimate fitting poses with CryoPARE-Net.** Learned geometric features establish correspondences and support rigid-pose estimation, followed by density-guided local optimization.
+3. **Assemble through chains and domains.** Chain-level fitting provides candidate poses for domain processing. Remaining domains are fitted independently, and occupied density is masked as domains are accepted.
+4. **Merge and refine.** Accepted domains are assembled into chains and a complex; homologous-domain pose reassignment uses connectivity information. Output filtering and optional refinement provide the final models.
 
-Enable all major refinement options:
+The current code uses the bundled DomainParser/DSSP tools for domain partitioning. Single-domain chains can enter domain fitting directly. Detailed runtime behavior is documented in [ALGORITHM.md](ALGORITHM.md).
 
-```bash
-python main.py <data_dir> \
-  --log \
-  --complex-domain-opt \
-  --homo-chain-refine \
-  --chain-threshold 0.40 \
-  --complex-threshold 0.30 \
-  --domain-threshold 0.40 \
-  --num-processes 16
-```
+<a id="faq"></a>
 
-Run fitting and assembly without Step 4 refinement:
+## FAQ
 
-```bash
-python main.py <data_dir> --no-refine --log
-```
+<details>
+<summary><strong>What structure inputs do I need?</strong></summary>
 
-Keep selected chains intact during domain splitting:
+Supply existing protein models in PDB or mmCIF format, obtained from structure prediction or experiment. This entry point does not predict a structure from a FASTA sequence. Multi-chain structure files require `--complex-domain-opt` in the current domain-based assembly implementation.
 
-```bash
-python main.py <data_dir> --no-domain-split A,B --log
-```
+</details>
 
-## Assembly strategy
+<details>
+<summary><strong>How should I choose the contour level?</strong></summary>
 
-Chains and domains are processed in a unified queue ordered by radius of
-gyration, with larger components considered first:
+Use a level appropriate for the density map, informed by its recommended contour and inspection of the density. It determines the density retained for point-cloud sampling. A value suitable for one map need not be suitable for another.
 
-1. Fit a chain with PARE-Net, perform local optimisation, and accept it when
-   the CC threshold is reached.
-2. If a chain fails, add its domains immediately to the same queue.
-3. Fit domains using independent thresholds and round management for each
-   chain.
-4. Merge fitted domains back into chains according to residue order.
-5. Build both the complete accepted assembly and a component-filtered final
-   complex.
+</details>
 
-See [ALGORITHM.md](ALGORITHM.md) for the algorithm description.
+<details>
+<summary><strong>Why can an input component be rejected?</strong></summary>
 
-## Repository structure
+Check the log and whether domains were generated. Zero-domain components are rejected, including chains excluded by `--no-domain-split` and multi-chain templates processed without `--complex-domain-opt`. Check input preparation before changing fitting thresholds.
 
-```text
-demo_reg/
-|-- main.py                         command-line entry point
-|-- compute_cc_mask.py              standalone CC-mask calculation
-|-- check_clash.py                  CA-overlap detection
-|-- geo_sym_refine.py               homologous-chain refinement CLI
-|-- requirements.txt
-|-- ALGORITHM.md
-|-- protassem/
-    |-- pipeline.py                 top-level pipeline orchestration
-    |-- core/                       shared structure and scoring utilities
-    |-- voxelize/                   density-map voxelisation
-    |-- sampling/                   point-cloud sampling
-    |-- fitting/                    PARE-Net fitting and local optimisation
-    |-- assembly/                   queue scheduling, domain fitting and refinement
-```
+</details>
 
-## External dependencies
+<details>
+<summary><strong>Is the minimum domain CC a hard acceptance guarantee?</strong></summary>
 
-| Dependency | Type | Handling |
-|---|---|---|
-| `pareconv` | CUDA extension | Source included; compile on the target machine. |
-| PARE-Net checkpoint | Model weight | Included under `protassem/fitting/parenet/weights/`. |
-| USalign | Executable | Included under `protassem/core/`. |
-| Sample (VoxEM) | Executable | Included under `protassem/sampling/`. |
-| DomainParser and DSSP | Executables | Included under `protassem/assembly/domain_parser/`. |
+No. Plateau and round-end selection retain paths that can accept domains below the current nominal threshold. Chain-pose and independent-domain homologous thresholds also differ. The final `--complex-min-cc` output filter is a separate step; inspect map-model agreement and the resulting structure.
 
-Except for `pareconv`, which must be compiled for the target CUDA environment,
-the required model code and executables are included in the repository.
+</details>
 
-## Standalone utilities
+<details>
+<summary><strong>What if GPU memory is insufficient?</strong></summary>
 
-Calculate CC-mask:
+Check the memory actually available to the process, especially on MIG devices. Hypothesis scoring is chunked by default; a smaller positive `--hypothesis-chunk` can reduce memory used by that scoring stage, but does not bound every allocation. `--num-processes` controls CPU workers. The tested GPU allocation is listed under installation requirements.
 
-```bash
-python compute_cc_mask.py <structure.pdb/cif> <density.mrc> <resolution> [contour]
-```
+</details>
 
-Run homologous refinement independently:
+<details>
+<summary><strong>Where is the final model?</strong></summary>
 
-```bash
-python geo_sym_refine.py <case_dir>
-python geo_sym_refine.py --complex a.cif --density b.mrc --resolution 3.5
-```
+Look in `<output_dir>/assembly/final_results/`. Inspect `assembled_complex.cif`, the assembly summary and the log; if a refinement result was produced, also inspect `refined_complex.cif`. The method places input chains and domains predominantly as rigid units, so errors within an input domain can remain.
 
-Check CA overlap:
+</details>
 
-```bash
-python check_clash.py <pdb_directory> [clash_distance] [overlap_ratio_threshold]
-```
+<a id="citation"></a>
 
+## Citation
 
+Associated manuscript: **Accurate protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**.
 
-### Low-memory CLI defaults
+Publication details and a verified BibTeX entry will be added when available.
 
-`python main.py <data_dir>` enables hypothesis scoring in blocks of 64 by default;
-no JSON file or extra flag is required. Query tiling from the validated model is
-also retained. `--hypothesis-chunk 128` selects a different block size and
-`--hypothesis-chunk 0` disables hypothesis scoring chunks (query tiling remains).
-An explicit CLI value overrides `--runtime-config path/to/config.json`; otherwise
-the JSON value wins over the default. Negative CLI values are rejected.
+## Acknowledgements
 
-For the production parameter profile reported for DPA063001028, use:
-
-```bash
-python main.py map.mrc structures RESOLUTION CONTOUR new-output --complex-domain-opt --homo-chain-refine --num-processes 10 --batch-size 10
-```
-
-The CLI does not change CPU concurrency, thresholds or refinement defaults.
-Use `nvidia-smi` to measure device memory; a sampled peak is not a capacity guarantee.
-
-Validation (2026-09-25): test/1 completed in an isolated checkout on the serving
-host with `--complex-domain-opt --homo-chain-refine --num-processes 10 --batch-size 10`
-and no runtime JSON or hypothesis CLI override. Exit 0, two accepted components,
-assembled CIFs and summary present. NVIDIA MIG sampled peak: 2535 MiB (407 samples),
-wall time 235.96 s on A800 MIG ~20 GiB. This single run is not a speed comparison
-against the earlier ~80 GiB MIG measurements. Target-host executable compatibility
-wrappers were retained; only Python source files are deployed.
+CryoPARE-Net builds on PARE-Net and related point-cloud registration components. The implementation includes `pareconv` and `pointops`, US-align, the VoxEM sampling executable, DomainParser and DSSP. Please acknowledge and cite the relevant original methods when appropriate, and consult the original components for attribution and applicable licensing terms.

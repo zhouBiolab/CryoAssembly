@@ -57,8 +57,8 @@ def _validate_inputs(density_mrc, structure_files, resolution, contour, voxel_si
     """
     if not os.path.isfile(density_mrc):
         raise FileNotFoundError("density map not found: %s" % density_mrc)
-    if not str(density_mrc).lower().endswith(".mrc"):
-        raise ValueError("density map must be a .mrc file: %s" % density_mrc)
+    if not str(density_mrc).lower().endswith((".mrc", ".map")):
+        raise ValueError("density map must be a .mrc or .map file: %s" % density_mrc)
     if not structure_files:
         raise ValueError("no structure files (.pdb/.cif) given")
     missing = [f for f in structure_files if not os.path.isfile(f)]
@@ -303,8 +303,8 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
     kw = assembly_kwargs or {}
     log.info("  chain_threshold=%.3f  domain_threshold=%.3f  "
              "min_domain=%.3f  similarity=%.2f",
-             kw.get("chain_threshold", 0.40),
-             kw.get("initial_domain_threshold", 0.40),
+             kw.get("chain_threshold", 0.45),
+             kw.get("initial_domain_threshold", 0.45),
              kw.get("min_domain_threshold", 0.25),
              kw.get("similarity_threshold", 0.85))
 

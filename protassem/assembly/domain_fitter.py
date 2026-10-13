@@ -3,6 +3,7 @@
 import logging
 
 from protassem.fitting.pipeline import run_fitting
+from protassem.assembly.assembly_opt import homolog_threshold
 
 log = logging.getLogger(__name__)
 
@@ -20,12 +21,22 @@ def fit_domain_once(orch, drec, threshold, round_num):
     orch._domain_iter += 1
     fit_dir = (orch.work_dir / "domain_fit" / ("round%02d" % round_num)
                / ("%s_d%d" % (cid, dnum)))
-    log.info("  [域拟合] %s | round %d | thr=%.3f", dkey, round_num, threshold)
+    # 同源放宽/高 CC 档：先算有效阈值供早停使用。早停若仍用未放宽的 threshold，
+    # 就会比有效阈值更早掐断候选流（高 CC 档 0.50 的场景尤其致命）。
+    eff = threshold
+    if orch._is_homolog_accepted_domain(drec):
+        gid = drec.get("group_id")
+        accepted_ccs = orch.accepted_domain_group_ccs.get(gid, []) if gid is not None else []
+        eff = max(orch.min_domain_threshold,
+                  homolog_threshold(threshold, orch.domain_similar_relax,
+                                    accepted_ccs, low_band=False))
+    log.info("  [域拟合] %s | round %d | thr=%.3f%s", dkey, round_num, threshold,
+             "" if eff == threshold else " (eff=%.3f)" % eff)
     fit_result = run_fitting(
         orch.current_target_txt, drec["txt_file"],
         orch.current_density_mrc, orch.resolution, orch.contour,
         str(fit_dir), mode="domain", chain_pdb=drec["pdb_file"],
-        early_stop_threshold=threshold,
+        early_stop_threshold=eff,
         original_density_mrc=orch.original_density_mrc,
         num_processes=orch.num_processes, batch_size=orch.batch_size,
         mask_radius_factor=orch.mask_radius_factor,
@@ -38,10 +49,6 @@ def fit_domain_once(orch, drec, threshold, round_num):
         return ("failed", 0.0, None)
     cc = fit_result["cc_mask"]
     fp = fit_result["final_pdb"]
-    eff = threshold
-    if orch._is_homolog_accepted_domain(drec):
-        eff = max(orch.min_domain_threshold, threshold - orch.domain_similar_relax)
-        log.info("    %s 同源宽松 -> eff_thr=%.3f", dkey, eff)
     if cc >= eff:
         log.info("    %s 达标 cc=%.4f >= %.4f -> 接受+掩码", dkey, cc, eff)
         orch._accept_domain(drec, fp, cc)

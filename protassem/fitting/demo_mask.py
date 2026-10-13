@@ -74,13 +74,17 @@ log = logging.getLogger(__name__)
 # Voxel size configurations
 # ======================================================================
 
+# 2026-09-29：以下 5 个 config 是**当前实际执行**的集合（--configs all -> 0-4），
+# 每个 config 各配 Voxel / FPS 两种末层采样 = **10 种真实组合**。
+# 5 / 6 保留备用，默认不跑；要启用就把它们放回表里（或 --configs "0,1,2,3,4,5,6"）。
+# 注意：这个集合必须与 effective_sampling_config(voxel_table=...) 传入的表一致。
 VOXEL_SIZE_CONFIGS_NORMAL = {
     0: [2, 3.6, 6.48, 11.664],
     1: [1, 1, 3.6, 6.48],
     2: [1, 1, 4, 12],
     3: [1, 2, 4, 11],
     4: [1, 3.6, 6.48, 11.664],
-    5: [1, 1, 4, 8],
+    # 5: [1, 1, 4, 8],
 }
 
 VOXEL_SIZE_CONFIGS_MASK = {
@@ -89,8 +93,8 @@ VOXEL_SIZE_CONFIGS_MASK = {
     2: [1, 1, 4, 12],
     3: [1, 2, 4, 11],
     4: [1, 3.6, 6.48, 11.664],
-    5: [1, 1, 4, 8],
-    6: [1, 1, 2, 4],
+    # 5: [1, 1, 4, 8],
+    # 6: [1, 1, 2, 4],
 }
 
 
@@ -161,16 +165,28 @@ def preprocess_point_cloud_data(file_path, point_limit=65000, is_mask_file=False
 # Core inference
 # ======================================================================
 
-def effective_sampling_config():
-    """当前真正生效的多尺度配置（体素尺寸列表 + 最后一层采样方式）。
+def effective_sampling_config(config_id=None, sampling_method=None, voxel_table=None):
+    """多尺度配置（体素尺寸列表 + 最后一层采样方式）。
 
-    pareconv 的 `precompute_subsample` 从模块级全局变量读配置；本仓库没有任何地方设置它们，
-    因此实际始终是 config 0 + voxel（T02 实测：标签 configs=all 时 6 个配置的输入完全相同）。
-    T04 起单侧几何构建显式传参，这里只把生效值读出来，不修改全局状态。
+    `config_id` / `sampling_method` / `voxel_table` 显式传入时按传入值解析；全部为空时回退到
+    pareconv 的模块级全局（历史行为，恒为 config 0 + voxel —— 因为本仓库从不设置那些全局量）。
+
+    **2026-09-29 修复**：此前该函数无条件读全局，导致 `config_ids × ["voxel","fps"]` 的循环虽然跑了
+    14 次推理，几何却完全相同、`overlap` 完全并列，`max()` 取首个 -> 台账里 148 个候选全是 config 0 + voxel。
+    现在由调用方把循环变量传进来，多 config 才真正生效。
+
+    注意：`voxel_table` 必须与生成 `config_ids` 的那张表一致。pareconv 自带的
+    `VOXEL_SIZE_CONFIGS` 只有 0-4，用它查 5/6 会静默回退到 config 0。
     """
-    config_id, sampling_method = data_mask_module.get_current_config()
-    voxel_sizes = data_mask_module.VOXEL_SIZE_CONFIGS.get(
-        config_id, data_mask_module.VOXEL_SIZE_CONFIGS[0])
+    if config_id is None or sampling_method is None:
+        global_id, global_sampling = data_mask_module.get_current_config()
+        if config_id is None:
+            config_id = global_id
+        if sampling_method is None:
+            sampling_method = global_sampling
+    if voxel_table is None:
+        voxel_table = data_mask_module.VOXEL_SIZE_CONFIGS
+    voxel_sizes = voxel_table.get(config_id, voxel_table[min(voxel_table)])
     return [float(value) for value in voxel_sizes], sampling_method
 
 
@@ -181,7 +197,7 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
                         masks_save_path=None, mask_suffix=None,
                         original_target_data=None, geometry_cache=None,
                         inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
-                        tail_pipeline=None):
+                        tail_pipeline=None, voxel_table=None):
     """Run PARENet inference on one source-target pair.
 
     只有本函数调用模型；@torch.no_grad() 覆盖"单侧几何构建 → 编码 → 配准 → 后处理"全路径。
@@ -241,7 +257,9 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
         # T05：单侧几何走有界 CPU 缓存（cache=None 或 fps 采样时不查不存，构建代码同一份）。
         # 生效采样配置来自 pareconv 的模块级全局变量（T02 实测：标签 configs=all 实际只跑
         # config 0 + voxel），这里显式读出、传参并记录，不再依赖隐式全局。
-        voxel_sizes, effective_sampling = effective_sampling_config()
+        # 2026-09-29：按本次循环的 config/sampling 解析，不再无条件读全局
+        voxel_sizes, effective_sampling = effective_sampling_config(
+            config_id, sampling_method, voxel_table)
         num_neighbors = cfg.backbone.num_neighbors
         ref_features = torch.ones((ref_norm.shape[0], 1), dtype=torch.float32)
         src_features = torch.ones((src_norm.shape[0], 1), dtype=torch.float32)
@@ -565,7 +583,8 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                                 geometry_cache=geometry_cache,
                                 inference_mode=inference_mode,
                                 encoding_cache=encoding_cache,
-                                tail_pipeline=tail_pipeline)
+                                tail_pipeline=tail_pipeline,
+                                voxel_table=CONFIGS)
                             mask_results.append(r)
                             all_results.append(r)
                         except Exception as e:
@@ -612,7 +631,8 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                             geometry_cache=geometry_cache,
                             inference_mode=inference_mode,
                             encoding_cache=encoding_cache,
-                            tail_pipeline=tail_pipeline)
+                            tail_pipeline=tail_pipeline,
+                            voxel_table=CONFIGS)
                         all_results.append(r)
                     except Exception as e:
                         log.error("Config %d-%s crashed: %s", cid, sm, e)

@@ -12,6 +12,9 @@ from protassem.core.scoring import calculate_cc_mask
 from protassem.core.similarity import calculate_tm_score
 from protassem.fitting.pipeline import run_fitting
 from protassem.fitting.local_optimizer import local_optimize
+from protassem.assembly.assembly_opt import homolog_threshold
+
+MAX_CHAIN_RETRY = 2   # 同源组尚无成功者时，一条链最多保留重试的次数
 
 log = logging.getLogger(__name__)
 
@@ -77,12 +80,22 @@ def fit_chain_item(orch, rec, state):
 
     base_threshold = orch.complex_threshold if is_complex else orch.chain_threshold
 
+    # 同源组已有接受 -> 按组内【最小】cc 分档算有效阈值（assembly_opt.homolog_threshold）。
+    # 早停阈值必须与它一致：高 CC 档有效阈值是 0.50，若仍按旧的 0.45 早停，
+    # 候选流会在 0.45 被掐断，链拿着不到 0.50 的结果去比 0.50 -> 必然被拒。
+    accepted_ccs = [r.get("cc_mask") for r in state.accepted_groups.get(group_id, [])
+                    if r.get("cc_mask") is not None]
+    threshold = homolog_threshold(base_threshold, orch.chain_similar_relax, accepted_ccs)
+    if accepted_ccs:
+        log.info("Chain %s: 同源组已接受 %d 条(min cc=%.4f) -> eff_thr=%.3f",
+                 cid, len(accepted_ccs), min(accepted_ccs), threshold)
+
     fit_dir = orch.work_dir / "chain_fit" / ("chain_fit_%d" % orch._chain_iter)
     fit_result = run_fitting(
         orch.current_target_txt, str(temp_chain_dir),
         orch.current_density_mrc, orch.resolution, orch.contour,
         str(fit_dir), mode="chain",
-        early_stop_threshold=base_threshold,
+        early_stop_threshold=threshold,
         original_density_mrc=orch.original_density_mrc,
         num_processes=orch.num_processes, batch_size=orch.batch_size,
         mask_radius_factor=orch.mask_radius_factor,
@@ -107,53 +120,54 @@ def fit_chain_item(orch, rec, state):
     rec["cc_mask"] = cc
     rec["fitted_pdb"] = final_pdb
 
-    threshold = base_threshold
-    has_accepted_similar = len(state.accepted_groups.get(group_id, [])) > 0
-    if has_accepted_similar:
-        threshold = base_threshold - orch.chain_similar_relax
-
     orch._save_attempt("chain_%s_iter%d" % (cid, orch._chain_iter), rec, cc, final_pdb)
 
-    if cc >= threshold:
-        log.info("Chain %s accepted (cc=%.4f >= %.3f)", cid, cc, threshold)
-        if orch.improve_accepted:
-            final_pdb, cc = try_improve_chain_with_domains(orch, rec, final_pdb, cc)
-            rec["cc_mask"] = cc
-        orch._accept_chain(rec, final_pdb, cc)
-        orch._mask_region(final_pdb)
-        state.accepted_groups[group_id].append(rec)
-        state.accepted_chain_pdbs.append(pdb)
-        state.accepted_group_ids.add(hgid)
-        for d in orch.domain_records.get(cid, []):
-            d["status"] = "rejected"
-        return None
-    else:
-        log.info("Chain %s rejected (cc=%.4f < %.3f)", cid, cc, threshold)
-        domains = orch.domain_records.get(cid, [])
-        has_domains = len(domains) >= 1
-        multi_domain = len(domains) > 1
-        success = False
-        if multi_domain and orch.domain_opt:
-            success = try_domains_via_chain_pose(orch, rec, final_pdb)
-        if has_domains:
-            if success:
-                # 链姿态降域接受了部分域；剩下没达标的域仍要走域拟合
-                rec["status"] = "accepted_via_domains"
-                state.accepted_groups[group_id].append(rec)
-                state.accepted_chain_pdbs.append(pdb)
-                state.accepted_group_ids.add(hgid)
-            else:
-                rec["status"] = "needs_domain_assembly"
-                orch.failed_chain_pdbs.append(pdb)
-                state.group_fail_count[hgid] += 1
-            orch.needs_domain_assembly.append(cid)
-            available = [d for d in domains if d["status"] == "available"]
-            return available
+    domains = orch.domain_records.get(cid, [])
+    has_domains = len(domains) >= 1
+
+    # 2026-09-30（只接受达标结构域）：链不再是接受单位。
+    # 原来的 cc >= threshold 整链接受分支已删除 —— 无论链 cc 多少，都只把这条链
+    # 当作"域姿态的来源"：逐域局部优化，只接受 cc 达标的域。
+    # chain_threshold 退化为纯记录值（仍由 assembly_summary.txt 打印）。
+    log.info("Chain %s fitted (cc=%.4f, chain_threshold=%.3f 仅记录)", cid, cc, threshold)
+
+    success = False
+    # 单域链不走链姿态：它的"链姿态"就是域自己的姿态，再套一次是重复劳动，
+    # 直接让域进队列、和其他结构域一起排序拟合即可。
+    if len(domains) > 1 and orch.domain_opt:
+        success = try_domains_via_chain_pose(orch, rec, final_pdb)
+
+        # 2026-09-30 撤除"保留重试、域暂不放"分支。
+        # 它有两个致命副作用：
+        #   1) 同源组里所有链都进这个分支时，_release_stalled_retries 的"还有兄弟在试"
+        #      判定恒为真 -> 互等死锁，谁的域都放不出去；
+        #   2) 这个分支的 return None 在 domain_opt 开关之前，导致
+        #      try_domains_via_chain_pose（链姿态逐域局部优化）从未执行，
+        #      两个实测任务里它的产出目录 chain_domain_transform_* 一个都没有。
+        # 而且原始设计本就不需要它：链被拒后走 domain_opt 逐域局部优化，
+        # 达标的域被接受 -> rec 记为 accepted_via_domains（相当于链也达标），
+        # 同源组随即有了成功者，相似的链会按 base - relax 的放宽阈值继续拟合。
+        # 逐域优化没成功时，下面的 else 分支把域放进 needs_domain_assembly，
+        # 转由域拟合承接 —— 这就是原设计自带的回退机制。
+    if has_domains:
+        if success:
+            # 有域达标 <=> 这条链能拟合：同源组记一笔，相似的链照常先做链拟合
+            rec["status"] = "accepted_via_domains"
+            state.accepted_groups[group_id].append(rec)
+            state.accepted_chain_pdbs.append(pdb)
+            state.accepted_group_ids.add(hgid)
         else:
-            rec["status"] = "rejected_no_domain"
+            # 一个域都没达标（或单域链）-> 这条链不适合，域交给域拟合
+            rec["status"] = "needs_domain_assembly"
             orch.failed_chain_pdbs.append(pdb)
-            log.info("Chain %s: no domains available, skipping", cid)
-            return None
+            state.group_fail_count[hgid] += 1
+        orch.needs_domain_assembly.append(cid)
+        return [d for d in domains if d["status"] == "available"]
+    else:
+        rec["status"] = "rejected_no_domain"
+        orch.failed_chain_pdbs.append(pdb)
+        log.info("Chain %s: no domains available, skipping", cid)
+        return None
 
 
 def try_domains_via_chain_pose(orch, chain_rec, fitted_chain_pdb):
@@ -194,6 +208,10 @@ def try_domains_via_chain_pose(orch, chain_rec, fitted_chain_pdb):
         if orch._is_homolog_accepted_domain(drec):
             dthr = max(orch.min_domain_threshold,
                        orch.initial_domain_threshold - orch.domain_similar_relax)
+        # 2026-09-30：逐域 cc 必须落日志，否则事后无从判断某个域为何被收/被退
+        log.info("  chain_pose %s d%d: init=%.4f optimized=%.4f thr=%.4f -> %s",
+                 cid, dnum, init_cc, opt_cc, dthr,
+                 "接受" if final_cc >= dthr else "未达标转域拟合")
         if final_cc >= dthr:
             orch._domain_iter += 1
             orch._accept_domain(drec, final_pdb, final_cc)
@@ -204,71 +222,3 @@ def try_domains_via_chain_pose(orch, chain_rec, fitted_chain_pdb):
             drec["chain_pose_pdb"] = final_pdb
 
     return success_count > 0
-
-
-def try_improve_chain_with_domains(orch, chain_rec, fitted_pdb, original_cc):
-    """Try to improve an accepted chain by optimizing its domains individually."""
-    cid = chain_rec["chain_id"]
-    domains = orch.domain_records.get(cid, [])
-    if not domains or len(domains) <= 1:
-        return fitted_pdb, original_cc
-
-    improve_dir = orch.work_dir / ("chain_improve_%s" % cid)
-    os.makedirs(improve_dir, exist_ok=True)
-    temp_fitted = []
-
-    is_complex = chain_rec.get("is_complex", False)
-
-    for drec in domains:
-        dnum = drec["domain_num"]
-        transformed = str(improve_dir / ("transformed_d%d.pdb" % dnum))
-        if not align_by_resid(fitted_pdb, drec["pdb_file"], transformed):
-            continue
-
-        transformed_cc = calculate_cc_mask(orch.current_density_mrc, transformed,
-                                           orch.resolution, orch.contour)
-        opt_pdb = str(improve_dir / ("optimized_d%d.pdb" % dnum))
-        ok, opt_path, opt_cc = local_optimize(
-            transformed, orch.current_density_mrc, opt_pdb,
-            orch.resolution, orch.contour,
-            initial_cc=transformed_cc,
-            context=orch.context)
-        if ok and opt_path and opt_cc > transformed_cc:
-            final = opt_path
-        else:
-            final = transformed
-
-        src_cid = drec.get("source_chain_id")
-        chain_id_for_cif = src_cid if (is_complex and src_cid) else cid
-        cif = str(improve_dir / ("domain_%d.cif" % dnum))
-        pdb_to_cif(final, cif, chain_id=chain_id_for_cif)
-        temp_fitted.append({"domain_num": dnum, "fitted_cif": cif,
-                            "chain_id": chain_id_for_cif,
-                            "source_chain_id": src_cid})
-
-    if not temp_fitted:
-        return fitted_pdb, original_cc
-    chain_rec["domain_cifs"] = temp_fitted
-
-    from protassem.assembly.domain_assembler import merge_domains
-    ranges, _ = orch.domain_adjacency.get(cid, ({}, {}))
-    assembled_cif = merge_domains(orch, cid, temp_fitted, ranges,
-                                  is_complex=is_complex)
-    if not assembled_cif:
-        return fitted_pdb, original_cc
-
-    assembled_cc = calculate_cc_mask(orch.original_density_mrc, assembled_cif,
-                                     orch.resolution, orch.contour)
-    if assembled_cc > original_cc:
-        log.info("Chain %s improved by domain reassembly: %.4f -> %.4f",
-                 cid, original_cc, assembled_cc)
-        from Bio.PDB import MMCIFParser, PDBIO as PDB_IO
-        parser = MMCIFParser(QUIET=True)
-        s = parser.get_structure("a", assembled_cif)
-        improved_pdb = str(improve_dir / ("improved_%s.pdb" % cid))
-        io = PDB_IO()
-        io.set_structure(s)
-        io.save(improved_pdb)
-        return improved_pdb, assembled_cc
-
-    return fitted_pdb, original_cc

@@ -24,6 +24,34 @@ class AssemblyOptConfig:
     clash_overlap_thr: float = 0.10        # CA 重叠比 > 此值算 clash（保 CA 多者）
 
 
+HIGH_CC_TIER: float = 0.55     # 同源组最小 cc 达到此值 -> 升到高 CC 档
+HIGH_CC_RELAX: float = 0.05    # 高 CC 档的容许值（档位 - 容许 = 有效阈值）
+
+
+def homolog_threshold(base, relax, accepted_ccs, *, low_band=True):
+    """同源组已接受时，按组内【最小】cc 分档给出有效阈值。
+
+    base=设定阈值(0.45) relax=容许值(0.03)：
+      - 组内还没接受过          -> base                （不放宽）
+      - min cc >= 0.55          -> 0.55 - 0.05 = 0.50  （高 CC 档；档位封顶不再上升）
+      - min cc >= base + relax  -> base                （正常档；不放宽）
+      - min cc <  base + relax  -> min cc - relax      （弱于设定值 -> 按最小 cc 放宽）
+
+    low_band=False：跳过下面两档，只保留高 CC 档，其余仍走 base - relax
+    （域侧沿用旧行为，仅补上高 CC 档）。
+    """
+    if not accepted_ccs:
+        return base
+    a = min(accepted_ccs)
+    if a >= HIGH_CC_TIER:
+        return HIGH_CC_TIER - HIGH_CC_RELAX
+    if not low_band:
+        return base - relax
+    if a >= base + relax:
+        return base
+    return a - relax
+
+
 def ca_count(pdb):
     """PDB 里 CA/P 原子数（残基数近似）。"""
     n = 0

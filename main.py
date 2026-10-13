@@ -33,9 +33,9 @@ def build_parser():
     parser.add_argument("--log-file", metavar="PATH",
                         help="指定日志文件路径（优先于 --log）")
     # 整链拟合接受阈值：链级 cc_mask >= 此值才作为整链直接接受
-    parser.add_argument("--chain-threshold", type=float, default=0.40, metavar="CC")
+    parser.add_argument("--chain-threshold", type=float, default=0.45, metavar="CC")
     # 结构域第 1 轮接受阈值（随轮次向 --domain-min-cc 衰减）
-    parser.add_argument("--domain-threshold", type=float, default=0.40, metavar="CC")
+    parser.add_argument("--domain-threshold", type=float, default=0.45, metavar="CC")
     # 结构域阈值下限/地板：轮次衰减与同源宽松后不低于此值
     parser.add_argument("--domain-min-cc", type=float, default=0.35, metavar="CC")
     # 多链复合物模板整体拟合的接受阈值（无复合物模板时不触发）
@@ -48,7 +48,7 @@ def build_parser():
     parser.add_argument("--refine-tm", type=float, default=0.75, metavar="TM")
     parser.add_argument("--num-processes", type=int, default=8, metavar="N",
                         help="并行进程数（CC 计算 / 局部优化）")
-    parser.add_argument("--batch-size", type=int, default=8, metavar="N",
+    parser.add_argument("--batch-size", type=int, default=5, metavar="N",
                         help="监控循环每攒多少 pred 做一次评估（每批立刻逐个局部优化）")
     # PARENet 掩码参数：掩码半径 = 回转半径 × 该因子；最小点间距 = 掩码半径 × 该因子
     parser.add_argument("--mask-radius-factor", type=float, default=1.35,

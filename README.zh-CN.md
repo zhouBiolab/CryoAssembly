@@ -1,286 +1,260 @@
-# protassem -- 蛋白质结构组装流水线
+<div align="center">
 
-**简体中文** | [English](README.md)
+# CryoAssembly
 
-输入实验密度图 + 若干链的结构文件，自动完成 **体素化 -> 点云采样 -> PARENet 配准拟合 -> 统一队列组装 -> 精修**，
-输出组装好的复合物 CIF。
+**通过几何对应学习，从 cryo-EM 和 cryo-ET 密度图中装配蛋白结构**
 
-```
-密度图(.mrc) + 链结构(.pdb/.cif)  ->  [体素化] -> [采样] -> [统一队列拟合+组装] -> [精修]  ->  复合物(.cif)
-```
+![平台：Linux x86_64](https://img.shields.io/badge/platform-Linux_x86__64-347D83)
+![Python：3.8](https://img.shields.io/badge/Python-3.8-347D83)
+![CUDA：11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
 
----
+[English](README.md) · **简体中文**
 
-## 一、环境依赖
+[安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation)
 
-### 1. Python 包
+</div>
 
-```bash
-conda create -n point python=3.8
-conda activate point
-pip install -r requirements.txt
-```
+## 概述
 
-### 2. pareconv（关键依赖，源码随仓库附带，需本机编译）
+CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）和冷冻电子断层成像（cryo-ET）密度图中。它结合基于深度特征的结构与密度图配准，以及链和域两个层级的装配，输出 mmCIF 格式的蛋白复合物模型。
 
-PARENet 推理依赖 pareconv 包（含 CUDA 编译扩展），源码已随仓库放在
-protassem/fitting/pareconv_src/：
+核心模块 **CryoPARE-Net** 学习结构点云与密度图点云之间的几何对应关系，估计拟合姿态；随后通过密度引导的局部优化和域级装配，将输入组分放置到密度图中。运行时需要提供预测或实验获得的蛋白结构、密度图、分辨率和轮廓阈值；此命令行流程不包含从序列预测结构的步骤。
 
-```bash
-cd protassem/fitting/pareconv_src
-pip install -e .
-cd pareconv/extensions/pointops/
-python setup.py install
-```
+| 输入 | 输出 |
+| :--- | :--- |
+| 密度图、蛋白结构模型、分辨率和轮廓阈值 | 装配后的复合物模型（`.cif`）与装配摘要 |
 
-编译前提：已装好 torch（如 1.10.0+cu113）+ nvcc + gcc/g++。
+<details>
+<summary><strong>查看方法流程图</strong></summary>
 
-验证：python -c "import torch; import pointops_cuda; from pareconv.modules.ops import index_select; print('OK')"
+<p align="center">
+  <img src="docs/assets/workflow.png" alt="CryoAssembly 总体流程：密度图与链模型、滑动掩码与体素化、点云采样、CryoPARE-Net 拟合、局部优化及迭代装配。" width="400">
+</p>
 
-### 3. 可执行文件（项目已内置，首次使用需赋权）
+**总体流程。** 本图提取自对应 CryoAssembly 正文的 Fig. 1a。密度图和链模型转换为点云表示，用于结构与密度图拟合、局部优化和迭代装配。当前实现按拟合后的域接受组分；具体运行行为见下文及 [ALGORITHM.md](ALGORITHM.md)。
 
-```bash
-chmod +x protassem/core/USalign
-chmod +x protassem/sampling/Sample
-chmod +x protassem/assembly/domain_parser/domainparser2.LINUX
-chmod +x protassem/assembly/domain_parser/dssp
-```
+</details>
 
-### 4. 模型权重（已内置）
+<a id="installation"></a>
 
-PARENet 权重 epoch-18.pth.tar（6.6MB）已放在 protassem/fitting/parenet/weights/。
+## 安装
 
----
-
-## 二、运行
-
-### 快速测试
-
-仓库不含示例数据（`example2` 不在仓库内），请用任意数据目录，目录内需包含
-密度图 `.mrc`、结构文件 `.pdb`/`.cif`、`resolution.txt`、`contour_level.txt`：
+需要 **Linux x86_64**、可访问的 NVIDIA GPU、Conda 和兼容的 C/C++ 编译器。已验证的安装基线为 Ubuntu 20.04、GCC/G++ 9.4 和 CUDA 11.3 工具链；扩展默认编译目标为 A100/A800 等 Ampere GPU。
 
 ```bash
-cd <项目根目录>
-python main.py <case_dir> --log
+git clone --branch main --single-branch https://github.com/zhouBiolab/CryoAssembly.git
+cd CryoAssembly
+bash install.sh
+conda activate cryoassembly
 ```
 
-结果在 `<case_dir>/output/`（手动模式可指定独立输出目录）：
+安装脚本创建独立的 `cryoassembly` 环境，安装固定版本的依赖，并编译仓库附带的 `pareconv` 与 `pointops` 扩展。`requirements.txt` 是唯一的 Python 依赖定义。
 
-```
-example2/output/
-+-- pipeline_<时间戳>.log
-+-- voxelized/
-+-- sampled/  sampled_sources/
-+-- assembly/
-    +-- final_results/
-    |   +-- assembled_complex.cif      最终复合物（过滤版，按 complex_min_cc 逐结构域剔除 cc 低的域）
-    |   +-- assembled_complex_all.cif  完整版（含全部已接受域，不过滤）
-    |   +-- refined_complex.cif        Step4 精修（若触发）
-    |   +-- assembly_summary.txt       摘要
-    |   +-- chains/                    链结果
-    |   +-- domain_chains/             域组装结果
-    +-- work/                          中间过程文件
-```
+<details>
+<summary><strong>系统要求与已验证环境</strong></summary>
 
-### 自动模式
-
-数据目录下放：密度图 .mrc、结构文件 .pdb/.cif、resolution.txt、contour_level.txt
-
-> **自动标准化**：程序自动读取结构文件内部的 chain ID（不依赖文件名），
-> 多链复合物自动保留为复合物（chain_id="A+B"形式）。文件名可以任意命名。
-> **链号去重**：若各输入（含复合物内部链）链号有重复，自动重排为唯一链号
-> （保留首次出现，冲突者顺延到下一空闲号：A–Z、a–z、然后两字母 AA…ZZ），并以 CIF 写出。
-> 链号用到两字母（总链数 > 52）时全程以 CIF 处理（PDB 单字符列存不下）。
+安装需要兼容 CUDA 11.3 的 NVIDIA 驱动、编译工具、`libGL.so.1` 和 `libgomp.so.1`。在 Ubuntu 20.04 中，运行脚本前可以用以下命令补齐缺少的系统包：
 
 ```bash
-python main.py <data_dir> --log
+sudo apt-get install build-essential libgl1 libgomp1
 ```
 
-### 手动模式
+发现缺少前置依赖时，安装脚本会报错并停止，不会自动执行 `apt-get`。
+
+| 组件 | 已验证基线 |
+| :--- | :--- |
+| 操作系统 | Ubuntu 20.04.6，Linux x86_64 |
+| 编译器 | GCC/G++ 9.4.0 |
+| Python | 3.8.20 |
+| PyTorch | 1.10.0+cu113 |
+| CUDA 工具链 / nvcc | 11.3.1 / 11.3.122 |
+| NumPy / Numba / llvmlite | 1.21.5 / 0.56.4 / 0.39.1 |
+| SciPy / Biopython / Open3D | 1.10.1 / 1.79 / 0.14.1 |
+
+安装核验使用 A800 的 MIG `1g.10gb` 分配，PyTorch 可见显存为 9,728 MiB。这是实际核验的设备分配记录，不是所有输入通用的最低显存要求。显存需求受输入规模影响。其他 GPU 架构需要设置合适的 `TORCH_CUDA_ARCH_LIST`，不在本次已记录的验证基线内。
+
+`nvidia-smi` 显示的 CUDA 版本代表驱动能力，与工具链编译器版本不同。脚本从官方 cu113 索引获取 PyTorch，并核对实际版本、扩展路径和导入情况。
+
+</details>
+
+<details>
+<summary><strong>环境选择与安装核验</strong></summary>
 
 ```bash
-python main.py <density.mrc> <struct_dir> <resolution> <contour> [output_dir] --log
+bash install.sh myenv                  # 创建新环境
+bash install.sh myenv --skip-env       # 在已有环境中安装依赖并重新编译
+bash install.sh myenv --verify-only    # 仅核验已有安装，不安装或编译
+bash install.sh --help
 ```
 
-选项可以放在位置参数之前、之间或之后。用法错误（未知选项、选项缺值、非数字、位置参数
-个数不是 1/4/5）退出码为 2，并打印具体原因。入口校验在建立输出目录之前完成：密度图必须
-存在且为 `.mrc`、结构文件列表非空且文件都存在、`resolution > 0`、`contour` 为有限数值、
-`voxel_size > 0`（`contour` 不接受缺省，自动目录模式仍从 `contour_level.txt` 读取）。
+已有同名环境默认会被拒绝，除非显式使用 `--skip-env`。该模式要求已有环境具备 Python 3.8.20 和 CUDA 11.3 工具链。`--verify-only` 执行依赖、导入及小型算子核验，不运行完整装配任务。
 
-### 参数说明
+`CONDA_BASE` 用于选择 Conda 安装位置。`MAX_JOBS` 控制扩展编译进程数，默认为 8。`PIP_INDEX_URL` 和 `PIP_FIND_LINKS` 可用于指定包镜像或准备好的 Python wheel 缓存；Python wheel 缓存不能替代 Conda 工具链包。
 
-#### 开关参数（加上=开启，不加=关闭）
+</details>
 
-| 参数 | 默认 | 含义 |
-|------|------|------|
-| `--log` | 关 | 写日志文件到输出目录（pipeline_<时间戳>.log） |
-| `--log-file <path>` | 无 | 指定日志文件路径（覆盖 `--log` 的自动命名） |
-| `--no-improve-accepted` | — | 加上=**关闭**逐域微调；不加=默认**开启**（链接受后逐域优化取更高 CC） |
-| `--no-domain-opt` | — | 加上=**关闭**域优化兜底；不加=默认**开启**（链没达标时用链姿态降域，把达标的域接受；与逐域微调解耦） |
-| `--complex-domain-opt` | 关 | 复合物域优化：拆内部链→各自域分割→接受后逐域微调→按链合并比较 CC |
-| `--homo-chain-refine` | 关 | Step 5 同源链精修：残基保护 + 域补回 + 用好链模板修复差链 |
-| `--no-pre-screen` | — | 加上=**关闭**装配前原始位姿并行预筛；不加=默认**开启** |
-| `--save-all-attempts` | 关 | 保存所有拟合尝试到 all_attempts/（调试用） |
-| `--cleanup` | 关 | 完成后删除 work/ 下的临时目录 |
-| `--no-domain-split <ids>` | 无 | 指定不拆域的链 ID（逗号分隔，如 `--no-domain-split A,B`），这些链只能作为整链拟合 |
-| `--no-refine` | — | 加上=**关闭** Step 4 同源域精修；不加=Step 4 默认**开启** |
+<a id="usage"></a>
 
-#### 数值参数（后跟一个数字）
+## 使用
 
-| 参数 | 默认值 | 含义 |
-|------|--------|------|
-| `--chain-threshold` | 0.40 | 普通链接受的 cc_mask 阈值 |
-| `--complex-threshold` | 0.35 | 复合物接受的 cc_mask 阈值（独立于链阈值，因复合物 CC 天然偏低） |
-| `--domain-threshold` | 0.40 | 域接受的起始 cc_mask 阈值（每条链的域独立衰减） |
-| `--domain-min-cc` | 0.35 | 域拟合绝对阈值：衰减下限 + 多域同接门槛（拟合阶段低于此值不接受） |
-| `--complex-min-cc` | 0.25 | 收尾高置信度筛选：cc<此值的组件不进最终复合物（与拟合阶段无关） |
-| `--similarity-threshold` | 0.85 | 链/域间 TM-score 相似判定阈值 |
-| `--refine-tm` | 0.75 | Step 4 同源域分组的 TM-score 阈值 |
-| `--num-processes` | 8 | 并行进程数（CC 计算 / 局部优化） |
-| `--batch-size` | 8 | 监控循环每攒多少 pred 做一次评估 |
-| `--mask-radius-factor` | 1.35 | PARENet 掩码半径因子（掩码半径 = 回转半径 × 该因子） |
-| `--min-point-distance-factor` | 0.32 | 掩码内最小点间距因子（最小点间距 = 掩码半径 × 该因子） |
+### 准备输入
 
-#### 使用示例
+创建目录并放入密度图及蛋白结构：
 
-最简运行（全部默认）：
+```text
+data_dir/
+├── map.mrc
+├── model_A.pdb
+├── model_B.cif
+├── resolution.txt
+└── contour_level.txt
+```
+
+`resolution.txt` 包含一个以 Å 为单位的分辨率数值；`contour_level.txt` 包含一个适合该密度图的轮廓阈值。上述文件名用于说明目录布局；这些命令不附带或下载示例数据。链标识从结构文件内容读取，不由文件名决定。
+
+### 运行装配
+
+在仓库目录中激活 `cryoassembly` 后运行：
 
 ```bash
-python main.py example2
+python main.py data_dir --log
 ```
 
-推荐生产配置（开日志 + 同源精修）：
+请保持域拆分开启。**如果结构文件包含多条链，需要添加 `--complex-domain-opt`。** 当前实现会拒绝没有域的组分，因此不应使用 `--no-domain-split` 来完成装配。
+
+### 查看结果
+
+默认输出目录位于输入密度图旁。主要结果文件为：
+
+```text
+data_dir/output/assembly/final_results/
+├── assembled_complex.cif
+├── assembled_complex_all.cif
+├── refined_complex.cif          # 精修产生结果时存在
+└── assembly_summary.txt
+```
+
+`assembled_complex.cif` 应用了最终域级 CC 过滤；`assembled_complex_all.cif` 包含全部已接受的装配组分。精修产生结果时，`refined_complex.cif` 保存精修后的模型。查看模型时请同时阅读摘要和日志。
+
+<details>
+<summary><strong>手动指定输入与输出目录</strong></summary>
+
+手动模式支持 `.mrc` 和 `.map`；自动目录模式只发现 `.mrc`。依次指定密度图、结构目录、分辨率、轮廓阈值和可选输出目录：
 
 ```bash
-python main.py <data_dir> --log --homo-chain-refine
+python main.py data_dir/map.mrc data_dir 5.6 0.04 result --log
 ```
 
-含复合物的数据（降低复合物阈值 + 复合物域优化）：
+其中 `5.6` 和 `0.04` 是说明用数值，请替换为对应密度图的参数。手动模式不需要两个参数文本文件。该命令的最终结果位于 `result/assembly/final_results/`。
+
+</details>
+
+<details>
+<summary><strong>多链输入与精修选项</strong></summary>
+
+处理包含多条链的结构模板：
 
 ```bash
-python main.py <data_dir> --log --complex-threshold 0.35 --complex-domain-opt
+python main.py data_dir --complex-domain-opt --log
 ```
 
-全开 + 自定义阈值：
+同源域精修默认开启。添加 `--homo-chain-refine` 可以开启其后的可选同源链精修阶段：
 
 ```bash
-python main.py <data_dir> \
-  --log \
-  --complex-domain-opt \
-  --homo-chain-refine \
-  --chain-threshold 0.40 \
-  --complex-threshold 0.30 \
-  --domain-threshold 0.40 \
-  --num-processes 16
+python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 ```
 
-只做拟合+组装，关闭 Step 4 精修：
+使用 `--no-refine` 可以关闭同源域精修阶段。精修选项不会取消输入需要进行域拆分的要求。
 
-```bash
-python main.py <data_dir> --no-refine --log
-```
+</details>
 
-指定部分链不做域分割（只能整链拟合）：
+<details>
+<summary><strong>参数与显存控制</strong></summary>
 
-```bash
-python main.py <data_dir> --no-domain-split A,B --log
-```
+| 选项 | CLI 默认值 | 含义 |
+| :--- | :---: | :--- |
+| `--chain-threshold` | 0.45 | 链拟合早停与预筛阈值；最终按域接受 |
+| `--domain-threshold` | 0.45 | 独立域拟合的初始阈值 |
+| `--complex-threshold` | 0.35 | 多链模板整体拟合的早停与预筛阈值 |
+| `--domain-min-cc` | 0.35 | 自适应阈值的名义下限；仍有接受例外 |
+| `--complex-min-cc` | 0.25 | 最终域级输出过滤阈值 |
+| `--num-processes` | 8 | 评分与局部优化共用的 CPU 进程池大小 |
+| `--batch-size` | 5 | 每批累积评估的候选数 |
+| `--mask-radius-factor` | 1.35 | 掩码半径相对于源结构回转半径的倍数 |
+| `--min-point-distance-factor` | 0.32 | 掩码中心间距相对于掩码半径的系数 |
+| `--hypothesis-chunk` | 64* | 每块评分的位姿假设数，用于限制推理显存 |
 
----
+*位姿假设分块的有效默认值通过运行配置设为 64。显式 CLI 值优先于 `--runtime-config`；设为 `0` 会关闭假设分块，但仍保留查询分块。CPU 进程数、候选批次与这项 GPU 显存控制相互独立。
 
-## 三、组装策略简述
+使用 `python main.py --help` 查看完整选项。拟合阈值、调度方式和接受例外见 [ALGORITHM.md](ALGORITHM.md)。`--no-improve-accepted` 为兼容保留，但不控制已删除的整链接受后改善路径；保留重试辅助代码也不代表旧的重试生成路径仍然运行。
 
-组装采用**统一队列**：链和域按回旋半径（大优先）排入同一个队列。
+</details>
 
-1. **链拟合**：PARENet 配准 → 局部优化 → CC 达阈值则接受并 mask 密度
-2. **链失败**：该链的域**立即加入队列**，与剩余链/域按回旋半径混排
-3. **域拟合**：每条链的域有独立的阈值和轮次管理
-4. **域链合并**：所有域拟合完后，按残基序合并回链
-5. **复合物构建**：合并已接受的链/域链 → assembled_complex_all.cif（完整）+ assembled_complex.cif（域级过滤）
+<a id="method"></a>
 
-详细算法见 [ALGORITHM.md](ALGORITHM.md)。
+## 方法
 
----
+1. **生成结构与密度图点云。** 通过体素化、采样和滑动密度掩码，准备局部结构与密度图配准输入。
+2. **使用 CryoPARE-Net 估计拟合姿态。** 学习几何特征以建立对应关系并估计刚体姿态，随后进行密度引导的局部优化。
+3. **通过链和域完成分层装配。** 链级拟合为域处理提供候选姿态，剩余域独立拟合；接受域时掩蔽其占据的密度区域。
+4. **合并与精修。** 将已接受的域合并成链和复合物；同源域姿态重分配利用连接信息，随后通过输出过滤和可选精修生成最终模型。
 
-## 四、项目结构
+当前代码使用附带的 DomainParser/DSSP 工具进行域划分。单域链可以直接进入域拟合。详细运行行为见 [ALGORITHM.md](ALGORITHM.md)。
 
-```
-demo_reg/
-+-- main.py                          入口（参数解析）
-+-- compute_cc_mask.py               独立算 cc_mask
-+-- check_clash.py                   CA 重叠检测
-+-- geo_sym_refine.py                独立同源 refine CLI
-+-- requirements.txt
-+-- ALGORITHM.md                     Step 3 组装算法详解
-|
-+-- protassem/
-    +-- pipeline.py                  三步流水线总调度
-    +-- core/                        共享工具
-    |   +-- scoring.py               cc_mask（numba）
-    |   +-- structure.py             PDB/CIF 读写/对齐
-    |   +-- similarity.py            USalign 封装（TM-score、Seq_ID）
-    |   +-- numba_kernels.py         numba 核函数
-    |   +-- constants.py / io.py
-    |   +-- USalign                  (可执行文件)
-    +-- voxelize/                    步骤1：体素化
-    +-- sampling/                    步骤2：采样
-    |   +-- Sample                   (可执行文件)
-    +-- fitting/                     步骤3a：拟合
-    |   +-- pipeline.py              统一拟合入口（两阶段+监控+多进程CC）
-    |   +-- parenet_client.py        PARENet 常驻服务客户端
-    |   +-- demo_mask.py             PARENet 推理引擎
-    |   +-- local_optimizer.py       局部优化
-    |   +-- masker.py                掩膜
-    |   +-- sw_mask.py / utils.py
-    |   +-- parenet/                 PARENet 模型+权重
-    |   +-- pareconv_src/            pareconv 源码
-    +-- assembly/                    步骤3b：组装
-        +-- orchestrator.py          组装总入口（准备+域分割+复合物域优化+收尾）
-        +-- unified_queue.py         统一队列调度器
-        +-- chain_fitter.py          链/复合物拟合逻辑
-        +-- domain_fitter.py         域拟合+轮次管理
-        +-- domain_assembler.py      域链合并
-        +-- assembly_opt.py          优化辅助（参数集中+多域同接+clash）
-        +-- complex_builder.py       复合物拼接+报告
-        +-- domain_splitter.py       域分割
-        +-- domain_parser/           DomainParser(可执行文件)
-        +-- refine_step.py           Step4 同源域精修
-        +-- homo_chain_step.py       Step5 同源链精修 门控
-        +-- homo_chain_refine.py     Step5 同源链精修 核心
-        +-- refine/                  vendored 同源域枚举
-```
+<a id="faq"></a>
 
----
+## 常见问题
 
-## 五、外部依赖一览
+<details>
+<summary><strong>需要什么结构输入？</strong></summary>
 
-| 依赖 | 类型 | 处理方式 |
-|------|------|----------|
-| pareconv | CUDA 编译包 | 源码随仓库，需本机编译 |
-| PARENet 权重 | 模型文件 6.6MB | 已内置 parenet/weights/ |
-| USalign | 可执行文件 | 已内置 core/ |
-| Sample (VoxEM) | 可执行文件 | 已内置 sampling/ |
-| DomainParser / dssp | 可执行文件 | 已内置 assembly/domain_parser/ |
-| config/model/backbone | PARENet 模型代码 | 已内置 parenet/ |
+需要提供结构预测或实验获得的 PDB/mmCIF 格式蛋白模型。该入口不从 FASTA 序列预测结构。当前按域装配的实现需要为多链结构文件开启 `--complex-domain-opt`。
 
-除 pareconv（CUDA 编译包，须按目标机编译）外，其余依赖均已内置。
+</details>
 
----
+<details>
+<summary><strong>如何选择轮廓阈值？</strong></summary>
 
-## 六、独立工具
+参考密度图的推荐轮廓阈值，并结合密度观察选择适合的值。这个参数决定点云采样时保留的密度范围；适合某张图的数值不一定适合其他图。
 
-### 独立算 cc_mask
-```bash
-python compute_cc_mask.py <结构.pdb/cif> <密度.mrc> <分辨率> [contour]
-```
+</details>
 
-### 独立同源 refine（不经主流程）
-```bash
-python geo_sym_refine.py <case_dir>
-python geo_sym_refine.py --complex a.cif --density b.mrc --resolution 3.5
-```
+<details>
+<summary><strong>为什么输入组分会被拒绝？</strong></summary>
 
-### CA 重叠检测
-```bash
-python check_clash.py <PDB目录> [碰撞距离] [重叠比例阈值]
-```
+检查日志以及是否生成了域。没有域的组分会被拒绝，包括通过 `--no-domain-split` 排除的链，以及未开启 `--complex-domain-opt` 的多链模板。调整拟合阈值之前，先检查输入准备是否正确。
+
+</details>
+
+<details>
+<summary><strong>最低域 CC 是所有接受路径的硬保证吗？</strong></summary>
+
+不是。平台期和轮末选择仍保留可能接受低于当前名义阈值的域的路径。链姿态逐域处理与独立域拟合的同源阈值也有差异。最终 `--complex-min-cc` 输出过滤是另一层步骤；请检查模型与密度图的吻合程度以及所得结构。
+
+</details>
+
+<details>
+<summary><strong>GPU 显存不足时怎么办？</strong></summary>
+
+检查进程实际可用的显存，尤其是 MIG 设备。位姿假设评分默认分块；减小正整数 `--hypothesis-chunk` 可降低该评分阶段的显存，但不能限制所有显存分配。`--num-processes` 控制 CPU 进程数。实际核验的 GPU 分配见安装要求。
+
+</details>
+
+<details>
+<summary><strong>最终模型在哪里？</strong></summary>
+
+查看 `<output_dir>/assembly/final_results/` 中的 `assembled_complex.cif`、装配摘要和日志；精修产生结果时，同时查看 `refined_complex.cif`。方法主要以刚体方式放置输入链和域，因此输入域内部的结构错误可能保留。
+
+</details>
+
+<a id="citation"></a>
+
+## 引用
+
+对应正文题目：**Accurate protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**。
+
+正式出版信息和核实后的 BibTeX 将在可用时补充。
+
+## 致谢
+
+CryoPARE-Net 基于 PARE-Net 及相关点云配准组件构建。实现中包含 `pareconv`、`pointops`、US-align、VoxEM 采样程序、DomainParser 和 DSSP。请根据实际使用情况致谢并引用相关原始方法，并查阅原始组件的署名信息和适用许可条款。

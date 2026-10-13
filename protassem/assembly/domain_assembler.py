@@ -76,6 +76,25 @@ def assemble_domain_chains(orch):
       - 过滤版（仅 cc>=complex_min_cc）-> 记录 fitted_cif_filtered -> assembled_complex.cif
     两者都在**最终链号空间**落盘（内部空间 -> 最终只映射一次）。
     """
+    # 2026-09-30 兜底：装配的输入应以"域的成功"为准，而不是"链拟合的判决"。
+    # 凡是有已接受域、却不在名单里的链，一律补进来。没有这一步，一旦上游的
+    # 放行逻辑出问题（例如 2026-09-29 那次的互等死锁），24 个域全部达标接受
+    # 也会一条域链都装不出来，而且装配器一行日志都不打，极难发现。
+    for cid, recs in orch.domain_records.items():
+        if any(r.get("status") == "accepted" for r in recs):
+            if cid not in orch.needs_domain_assembly:
+                log.warning("链 %s: 有已接受域但不在装配名单，自动补入", cid)
+                orch.needs_domain_assembly.append(cid)
+
+    if not orch.needs_domain_assembly:
+        _acc = sum(1 for recs in orch.domain_records.values()
+                   for r in recs if r.get("status") == "accepted")
+        if _acc:
+            log.warning("无链进入域装配，但已有 %d 个已接受域 —— 这些域不会进入复合物", _acc)
+        else:
+            log.info("没有链需要域装配")
+        return
+
     for cid in dict.fromkeys(orch.needs_domain_assembly):   # 去重，避免同一域链装两遍
         chain_rec = next((c for c in orch.chain_records
                           if c["chain_id"] == cid), None)

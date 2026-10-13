@@ -21,21 +21,90 @@ def _accept_count(orch):
     return len(orch.accepted_chains) + len(orch.accepted_domain_pdbs)
 
 
+def _group_has_accepted(orch, rec):
+    """这条链的同源组里是否已经有整链接受（含"链姿态降域接受"）。"""
+    gid = rec.get("group_id", rec["chain_id"])
+    for other in orch.chain_records:
+        if other is rec:
+            continue
+        if other.get("group_id", other["chain_id"]) != gid:
+            continue
+        if other["status"] in ("accepted_as_chain", "accepted_via_domains"):
+            return True
+    return False
+
+
+def _release_stalled_retries(orch):
+    """同源组既没成功者、也没有兄弟链还在试 -> 重试无望，放域、退回域拟合。
+
+    没有这一步，等待重试的链会永远卡住，而它的域又一直被压着不放。
+    """
+    released = 0
+    for rec in orch.chain_records:
+        if rec["status"] != "chain_retry_pending":
+            continue
+        gid = rec.get("group_id", rec["chain_id"])
+        # 2026-09-30 修复互等死锁：
+        # 原判定把处于 chain_retry_pending 的兄弟也算作"还在试"，于是当同一同源组里
+        # 所有链都待重试时，每条链都以为别人在推进，谁都不肯先放行 -> 全体互等。
+        # 而"待重试"的链只有在组内已出现成功者时才有机会推进，可组内要有成功者又得先有链
+        # 重试成功 —— 该条件永远不成立。因此这里只把仍处 pending（尚未尝试过）的兄弟
+        # 视为"还能推进"；全是待重试时，一起放行回域装配。
+        sibling_pending = any(
+            other is not rec
+            and other.get("group_id", other["chain_id"]) == gid
+            and other["status"] == "pending"
+            for other in orch.chain_records)
+        if _group_has_accepted(orch, rec) or sibling_pending:
+            continue
+        cid = rec["chain_id"]
+        rec["status"] = "needs_domain_assembly"
+        if cid not in orch.needs_domain_assembly:
+            orch.needs_domain_assembly.append(cid)
+        released += 1
+        log.info("链 %s: 同源组(%s)无成功者且无兄弟链在试 -> 放弃重试，域进池", cid, gid)
+    return released
+
+
 def _active_items(orch, recent_pdbs=None):
     """当前待处理项：pending 链 + available 域。
-    排序：与上一轮接受域相似的域优先(轮间优先) -> 再按回旋半径降序。"""
+
+    **阶段严格分离（2026-09-30）**：先跑完全部链拟合，全部结束后才进入域拟合。
+
+    原实现是"链与域混在一个队列里，按优先级逐轮调度"：任一链拟合完成，它的域
+    立刻进池；而且"与上一轮接受域相似的域"会被排到所有待拟合链之前。结果就是
+    链拟合与域拟合交织推进 —— 域名可能在**同源链尚未拟合**的情况下就消耗掉拟合
+    预算，与"先链拟合，再逐个结构域拟合"的流程语义不符。
+
+    现在：只要还有 pending 链，本函数只返回链；等链全部走完才放域进池。
+    这样每个域都是在**全部链姿态都已确定**之后才被拟合，同源放宽阈值/掩码也
+    都已按最终状态生效。
+    """
     items = []
     pending_chain_ids = set()
     for rec in orch.chain_records:
         if rec["status"] == "pending":
             items.append(("chain", rec))
             pending_chain_ids.add(rec["chain_id"])
-    # 域只有在其父链已被拟过(非 pending)后才进池：避免某链的域(或其同源链的域)
-    # 在该链自己链拟合之前就被拟。
+    # 等重试的链：同源组已经出过结果才重新排入（这时才吃得到放宽/分档阈值）。
+    # 一并计入 pending_chain_ids，把它的域挡住，避免域拟合先吃掉。
+    for rec in orch.chain_records:
+        if rec["status"] == "chain_retry_pending" and _group_has_accepted(orch, rec):
+            items.append(("chain", rec))
+            pending_chain_ids.add(rec["chain_id"])
+
+    # ---- 阶段一：还有链没拟合 -> 本轮只跑链，域一律不进池 ----
+    if pending_chain_ids:
+        items.sort(key=lambda x: -x[1]["gyration_radius"])
+        return items
+
+    # ---- 阶段二：全部链都已拟合过 -> 才放域进池 ----
+    # 到这里 pending_chain_ids 必为空，父链条件自然满足。
     for doms in orch.domain_records.values():
         for d in doms:
-            if d["status"] == "available" and d["chain_id"] not in pending_chain_ids:
+            if d["status"] == "available":
                 items.append(("domain", d))
+
     recent_pdbs = recent_pdbs or []
     _gof = getattr(orch, "domain_group_of", None) or {}
     recent_gids = set()
@@ -100,6 +169,7 @@ def run_unified_assembly(orch):
     last_accepted_pdbs = []   # 上一轮接受的域 pdb（轮间优先：其相似域下轮前排）
 
     while orch._target_has_points():
+        _release_stalled_retries(orch)
         items = _active_items(orch, last_accepted_pdbs)
         if not items:
             break
@@ -129,7 +199,7 @@ def run_unified_assembly(orch):
                 break
 
             if kind == "chain":
-                if rec["status"] != "pending":
+                if rec["status"] not in ("pending", "chain_retry_pending"):
                     continue
                 before = _accept_count(orch)
                 fit_chain_item(orch, rec, chain_state)

@@ -61,3 +61,11 @@ SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
 /protassem/fitting/pareconv_src/pareconv/modules/ops/test_gird.py
 
 /tests/test_low_memory_cli.py
+
+# Internal standalone utilities; retain locally without publishing
+/compute_cc_mask.py
+/geo_sym_refine.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver/down_pdb.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver/tran_cif.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver_norm/dele.py
+/check_clash.py

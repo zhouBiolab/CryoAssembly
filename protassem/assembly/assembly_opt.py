@@ -47,7 +47,7 @@ def ca_count(pdb):
 
 
 def ca_overlap(pdb_a, pdb_b):
-    import check_clash
+    from protassem.core import check_clash
     return check_clash.calculate_overlap_ratio_numpy(pdb_a, pdb_b, clash_distance=3.0)
 
 

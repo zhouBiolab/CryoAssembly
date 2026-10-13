@@ -224,7 +224,7 @@ Associated manuscript: **Accurate protein structure assembly from cryo-EM and cr
 
 ## License
 
-Original CryoAssembly contributions are licensed under **LGPL-3.0-only**. See [LICENSE](LICENSE), the incorporated [GPL v3 terms](licenses/GPL-3.0.txt) and [third-party notices](THIRD_PARTY_NOTICES.md).
+Copyright (c) 2026 CryoAssembly contributors. Original CryoAssembly contributions are licensed under **LGPL-3.0-only**. See [LICENSE](LICENSE) and the incorporated [GPL v3 terms](licenses/GPL-3.0.txt). Third-party components retain their own licenses and notices.
 
 ## Acknowledgements
 

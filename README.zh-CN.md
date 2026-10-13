@@ -224,7 +224,7 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 
 ## 许可
 
-CryoAssembly 的原创贡献采用 **LGPL-3.0-only**。完整条款见 [LICENSE](LICENSE)、其纳入的 [GPL 第 3 版条款](licenses/GPL-3.0.txt)及[第三方声明](THIRD_PARTY_NOTICES.md)。
+Copyright (c) 2026 CryoAssembly contributors. CryoAssembly 的原创贡献采用 **LGPL-3.0-only**。完整条款见 [LICENSE](LICENSE)及其纳入的 [GPL 第 3 版条款](licenses/GPL-3.0.txt)。第三方组件保留各自的许可与版权声明。
 
 ## 致谢
 

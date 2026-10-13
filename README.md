@@ -7,10 +7,13 @@
 ![Platform: Linux x86_64](https://img.shields.io/badge/platform-Linux_x86__64-347D83)
 ![Python: 3.8](https://img.shields.io/badge/Python-3.8-347D83)
 ![CUDA: 11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
+[![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
+
+[**Open the CryoAssembly web server ↗**](http://zhouxglab.com/CryoAssembly/)
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation)
+[Web server](#web-server) · [Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
 
 </div>
 
@@ -24,16 +27,24 @@ At its core, **CryoPARE-Net** learns geometric correspondences between structure
 | :--- | :--- |
 | Density map, protein structure models, resolution and contour level | Assembled complex models (`.cif`) and an assembly summary |
 
-<details>
+<details open>
 <summary><strong>View the workflow</strong></summary>
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="CryoAssembly workflow: density map and chain models, sliding masking and voxelization, point sampling, CryoPARE-Net fitting, local refinement and iterative assembly." width="400">
+  <img src="workflow.png" alt="CryoAssembly workflow: density map and chain models, sliding masking and voxelization, point sampling, CryoPARE-Net fitting, local refinement and iterative assembly." width="400">
 </p>
 
 **Workflow.** Overall method illustration extracted from Fig. 1a of the associated CryoAssembly manuscript. A density map and chain models are converted to point-cloud representations for structure-to-map fitting, local refinement and iterative assembly. The current implementation accepts fitted domains; its operational details are described below and in [ALGORITHM.md](ALGORITHM.md).
 
 </details>
+
+<a id="web-server"></a>
+
+## Web server
+
+Use the [**CryoAssembly web server**](http://zhouxglab.com/CryoAssembly/) to submit your density map and input protein structures through a browser, without installing the local software. Follow the input instructions on the server's submission page.
+
+The hosted service and this repository are maintained separately; refer to the server for its available options and submission limits. For a local run, follow the [installation instructions](#installation) below.
 
 <a id="installation"></a>
 
@@ -254,6 +265,14 @@ Look in `<output_dir>/assembly/final_results/`. Inspect `assembled_complex.cif`,
 Associated manuscript: **Accurate protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**.
 
 Publication details and a verified BibTeX entry will be added when available.
+
+<a id="license"></a>
+
+## License
+
+The original software contributions of the CryoAssembly copyright holders are licensed under the **GNU Lesser General Public License, version 3.0 only (LGPL-3.0-only)**. See [LICENSE](LICENSE) and the incorporated [GNU GPL version 3 terms](licenses/GPL-3.0.txt).
+
+Third-party code, bundled executables and model artifacts are not relicensed by this grant. Their provenance, retained notices and unresolved upstream permissions are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This statement grants rights only in the original contributions that the CryoAssembly copyright holders have authority to license.
 
 ## Acknowledgements
 

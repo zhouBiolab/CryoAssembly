@@ -7,10 +7,13 @@
 ![平台：Linux x86_64](https://img.shields.io/badge/platform-Linux_x86__64-347D83)
 ![Python：3.8](https://img.shields.io/badge/Python-3.8-347D83)
 ![CUDA：11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
+[![许可：LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
+
+[**打开 CryoAssembly 在线服务器 ↗**](http://zhouxglab.com/CryoAssembly/)
 
 [English](README.md) · **简体中文**
 
-[安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation)
+[在线服务器](#web-server) · [安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
 
 </div>
 
@@ -24,16 +27,24 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 | :--- | :--- |
 | 密度图、蛋白结构模型、分辨率和轮廓阈值 | 装配后的复合物模型（`.cif`）与装配摘要 |
 
-<details>
+<details open>
 <summary><strong>查看方法流程图</strong></summary>
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="CryoAssembly 总体流程：密度图与链模型、滑动掩码与体素化、点云采样、CryoPARE-Net 拟合、局部优化及迭代装配。" width="400">
+  <img src="workflow.png" alt="CryoAssembly 总体流程：密度图与链模型、滑动掩码与体素化、点云采样、CryoPARE-Net 拟合、局部优化及迭代装配。" width="400">
 </p>
 
 **总体流程。** 本图提取自对应 CryoAssembly 正文的 Fig. 1a。密度图和链模型转换为点云表示，用于结构与密度图拟合、局部优化和迭代装配。当前实现按拟合后的域接受组分；具体运行行为见下文及 [ALGORITHM.md](ALGORITHM.md)。
 
 </details>
+
+<a id="web-server"></a>
+
+## 在线服务器
+
+通过 [**CryoAssembly 在线服务器**](http://zhouxglab.com/CryoAssembly/)，可以在浏览器中提交密度图和输入蛋白结构，无需安装本地软件。输入准备请遵循服务器提交页面的说明。
+
+在线服务与本仓库分别维护，可用选项和提交限制以服务器说明为准。如需本地运行，请使用下面的[安装流程](#installation)。
 
 <a id="installation"></a>
 
@@ -254,6 +265,14 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 对应正文题目：**Accurate protein structure assembly from cryo-EM and cryo-ET maps through geometric correspondence learning**。
 
 正式出版信息和核实后的 BibTeX 将在可用时补充。
+
+<a id="license"></a>
+
+## 许可
+
+CryoAssembly 版权持有人拥有授权权利的原创软件贡献采用 **GNU 宽通用公共许可证第 3.0 版，仅限该版本（LGPL-3.0-only）**。完整条款见 [LICENSE](LICENSE) 以及其纳入的 [GNU GPL 第 3 版条款](licenses/GPL-3.0.txt)。
+
+本次授权不重新许可第三方代码、附带可执行程序或模型文件。这些组件的来源、保留声明及尚待确认的上游授权记录在 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。此许可说明仅授予 CryoAssembly 版权持有人有权授权的原创贡献中的权利。
 
 ## 致谢
 

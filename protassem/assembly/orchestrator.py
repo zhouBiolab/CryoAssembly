@@ -89,7 +89,6 @@ class AssemblyOrchestrator:
         self.output_dir = Path(output_dir or (self.source_dir / "assembly_output"))
         self.work_dir = self.output_dir / "work"
         self.final_dir = self.output_dir / "final_results"
-        # P3：运行级共享池（run_pipeline 传入；独立调用 run_assembly 时自建）
         self.context = context or ExecutionContext(pool_workers=num_processes)
 
         self.current_target_txt = None
@@ -101,14 +100,14 @@ class AssemblyOrchestrator:
         self.needs_domain_assembly = []
         self.failed_chain_pdbs = []
         self.failed_domain_pdbs = []
-        self.accepted_domain_pdbs = []        # 已接受域的 CIF 路径（计数/切片/refine 用）
-        self.accepted_domain_src_pdbs = []    # 对应模板 PDB 路径（相似判定，与 TM 缓存同键）
-        self.accepted_domain_groups = set()   # 已接受域的 group_id 集合（同源查表 O(1)）
-        self.accepted_domain_group_ccs = {}   # group_id -> [已接受域的 cc]（动态阈值分档用）
-        self.accepted_fitted_pdbs = []        # 已接受结构(链+域)的拟合 pose PDB（clash 检测用）
+        self.accepted_domain_pdbs = []
+        self.accepted_domain_src_pdbs = []
+        self.accepted_domain_groups = set()
+        self.accepted_domain_group_ccs = {}
+        self.accepted_fitted_pdbs = []
         self.excluded_domains = []
-        self.input_count = 0        # _prepare_chains 看到的输入文件数
-        self.skipped_inputs = []    # [(文件名, 原因)]，进运行摘要
+        self.input_count = 0
+        self.skipped_inputs = []
         self._chain_order = 0
         self._domain_chain_order = 0
         self._chain_iter = 0
@@ -182,8 +181,6 @@ class AssemblyOrchestrator:
         refined_cif = refine_step.maybe_refine(self)
 
         from protassem.assembly import homo_chain_step
-        # Step5 在 Step4（已按 complex_min_cc 过滤域集）之上做同源链精修；
-        # 过滤版为空时回退到完整版，不能因为过滤版没有组件就丢掉完整版。
         homo_cif = homo_chain_step.maybe_homo_refine(
             self, refined_cif or complex_cif or all_cif)
 
@@ -215,16 +212,10 @@ class AssemblyOrchestrator:
     # ==================================================================
 
     def _skip_input(self, name, reason):
-        """记录被跳过的输入（进运行摘要），不静默丢弃。"""
         self.skipped_inputs.append((name, reason))
         log.warning("chain file skipped: %s (%s)", name, reason)
 
     def _prepare_chains(self):
-        """Find structure files, read chain IDs from content, sort by size.
-
-        跳过的输入记录在 self.skipped_inputs 并写入运行摘要；一个可用链都没有时
-        直接失败，不再静默空跑。CIF -> PDB 占位转换失败属于边界失败，直接抛出。
-        """
         from protassem.core.structure import cif_to_pdb_placeholders, read_chain_ids
         cif_dir = self.work_dir / "cif_conversions"
         os.makedirs(cif_dir, exist_ok=True)
@@ -233,9 +224,6 @@ class AssemblyOrchestrator:
                            + list(self.source_dir.glob("*.cif")))
         self.input_count = len(structure_files)
 
-        # 2026-09-30：输入链号去重用的"已占用"集合 + 编号池。
-        # 复用 complex_builder 里那套 A-Z / a-z / 0-9（及两字符组合）的分配器，
-        # 保证重编号后仍在合法的 PDB 链号空间内。
         from protassem.assembly.complex_builder import _next_available_id
         _used_chain_ids = set()
         for sf in structure_files:
@@ -255,16 +243,9 @@ class AssemblyOrchestrator:
             else:
                 chain_id = chain_ids[0]
 
-            # 2026-09-30：用户的不同输入文件里可能写着相同的链号（例如两个文件都含链 A）。
-            # 内部一切主键（chain_records / domain_records / accepted_groups /
-            # needs_domain_assembly / chain_map）都按 chain_id 索引，重号会让两条链
-            # 互相覆盖，甚至少装配一条链。这里在入口处去重：冲突时改用编号池中
-            # 下一个未被占用的 ID。
-            # 最终输出的链号本就不由输入决定（complex_builder 会重新分配），
-            # 因此这次重编号对用户看到的结果没有影响。
             if chain_id in _used_chain_ids:
                 _new_id = _next_available_id(_used_chain_ids)
-                log.warning("输入链号重复：%s 的链号 %r 与已有输入冲突，内部重编号为 %r",
+                log.warning('Duplicate chain ID: %s chain %r conflicts with an existing input; remapped internally to %r',
                             sf.name, chain_id, _new_id)
                 chain_id = _new_id
             _used_chain_ids.add(chain_id)
@@ -313,11 +294,6 @@ class AssemblyOrchestrator:
                  len(self.chain_records), len(self.skipped_inputs))
 
     def chain_record(self, chain_id):
-        """按组件 ID 取原始链记录（含 chain_map）。
-
-        accepted_chains 里存的是摘要记录，不带 chain_map；需要链号空间信息
-        （占位链号 -> 真链号）时必须从 chain_records 取。
-        """
         for record in self.chain_records:
             if record["chain_id"] == chain_id:
                 return record
@@ -515,10 +491,6 @@ class AssemblyOrchestrator:
             cc = rec["pre_screen_cc"]
             cid = rec["chain_id"]
 
-            # 2026-09-30（只接受达标结构域）：预筛通过也不再整链接受。
-            # 预筛路径原先直接 _accept_chain + 把该链所有域标 rejected，与新语义冲突；
-            # 现在与链拟合路径一致：拿预筛得到的姿态做逐域局部优化，只接受达标域，
-            # 未达标的域保持 available，交给后续域拟合。
             domains = self.domain_records.get(cid, [])
             success = False
             if self.domain_opt and len(domains) > 1:
@@ -533,7 +505,6 @@ class AssemblyOrchestrator:
                 self.needs_domain_assembly.append(cid)
 
             if success:
-                # 有域达标 <=> 这条链能拟合
                 rec["status"] = "accepted_via_domains"
                 log.info("Pre-screen ACCEPTED via domains: %s (pre_cc=%.4f)", cid, cc)
             else:
@@ -728,9 +699,6 @@ class AssemblyOrchestrator:
                                 self.current_density_mrc, new_txt, new_mrc)
         if ok and os.path.exists(new_txt) and os.path.exists(new_mrc):
             shutil.copy2(new_txt, self.current_target_txt)
-            # P2-7：动态密度**每轮换新文件名**（路径即版本）。评分缓存按 路径+size+mtime
-            # 建键；继续覆盖同一个 current_density.mrc 时，mtime 粒度不够就可能命中旧密度，
-            # 而共享池 worker 里的缓存主进程清不掉。换名后主进程与所有 worker 都不会读到旧版本。
             versioned_mrc = str(self.work_dir
                                 / ("current_density_m%02d.mrc" % self._mask_iter))
             shutil.copy2(new_mrc, versioned_mrc)
@@ -748,12 +716,6 @@ class AssemblyOrchestrator:
     # ==================================================================
 
     def _precompute_similarity(self):
-        """准备阶段相似度预计算（并行）：
-        1) 并行预填 链×链 TM 缓存；贪心得到链同源分组 -> rec["group_id"]。
-        2) 同源链的同序号结构域即同源：域 group_id = "链组.域序号"（省掉大量 域×域 USalign）。
-        3) 并行预填 同源链之间同序号域 的 域×域 TM（让 _is_similar_to_any 命中缓存）。
-        之后 2-tries / 轮间优先 用 group_id 查表，轮内不再现算 USalign。
-        """
         from collections import defaultdict
         from protassem.core.similarity import prefill_tm_cache, calculate_tm_score
         chains = list(self.chain_records)
@@ -786,8 +748,7 @@ class AssemblyOrchestrator:
                 for j in range(i + 1, len(pl)):
                     dpairs.append((pl[i], pl[j]))
         n2 = prefill_tm_cache(dpairs, self.context)
-        log.info("[相似预计算] 链 %d 条 -> %d 同源组; 结构域 %d 同源组; "
-                 "并行预填 TM 对 链%d+域%d (进程 %d)",
+        log.info('[Similarity precompute] %d chains -> %d homologous groups; %d domain groups; prefill TM pairs: chains%d+domains%d (workers %d)',
                  len(chains), len(reps), len(bygrp), n1, n2, self.num_processes)
 
     def _find_similar_group(self, pdb, groups):
@@ -806,19 +767,12 @@ class AssemblyOrchestrator:
                    for p in pdb_list)
 
     def _is_homolog_accepted_domain(self, drec):
-        """该域是否与某个已接受域同源。
-
-        优先用预计算 group_id 查表(O(1))；缺 group_id 时回退到模板 PDB 的 TM 比对
-        (命中 _precompute_similarity 预填的缓存，键为 PDB 路径)。
-        """
         gid = drec.get("group_id")
         if gid is not None:
             return gid in self.accepted_domain_groups
         return self._is_similar_to_any(drec["pdb_file"], self.accepted_domain_src_pdbs)
 
     def _clashes_with_accepted(self, pdb):
-        """fitted pose 与任一已接受结构(链+域)的 CA 重叠是否 > clash_overlap_thr。
-        注意：须用 PDB（check_clash 按固定列解析 ATOM 的 CA/P，CIF 不适用）。"""
         from protassem.assembly.assembly_opt import ca_overlap
         return any(ca_overlap(pdb, q) > self.clash_overlap_thr
                    for q in self.accepted_fitted_pdbs)
@@ -837,10 +791,6 @@ class AssemblyOrchestrator:
             shutil.copy2(self.original_density_mrc, self.current_density_mrc)
 
     def _target_has_points(self):
-        """目标点云是否仍有剩余点（沿用历史阈值：至少 2 个点）。
-
-        读取失败时按 True 处理（保守认为目标仍可用），由后续步骤决定。
-        """
         try:
             return len(read_point_cloud(self.current_target_txt).points) >= 2
         except Exception:
@@ -863,7 +813,6 @@ class AssemblyOrchestrator:
 # ==================================================================
 
 def _output_status(orch):
-    """运行摘要用的输出统计：接受域数 / 合并链数 / 过滤数量。"""
     accepted_domains = sum(
         1 for records in orch.domain_records.values()
         for record in records if record.get("status") == "accepted")
@@ -876,10 +825,6 @@ def _output_status(orch):
 
 
 def _pre_screen_cc_worker(args):
-    """Worker for parallel cc_mask in pre-screening.
-
-    失败不再伪装成 0 分：带文件名抛 RuntimeError（Pool.map 会在父进程重新抛出）。
-    """
     density_mrc, structure_file, resolution, contour = args
     try:
         return calculate_cc_mask(density_mrc, structure_file, resolution, contour)
@@ -891,10 +836,7 @@ def _pre_screen_cc_worker(args):
 
 def run_assembly(target_txt, source_dir, density_mrc, resolution, contour,
                  output_dir=None, context=None, **kwargs):
-    """Convenience function wrapping AssemblyOrchestrator.
-
-    context 为 None 时自建运行级上下文，并在返回前（含异常路径）释放。
-    """
+    'Assemble fitted domains and generate final structures.'
     orch = AssemblyOrchestrator(
         target_txt=target_txt, source_dir=source_dir,
         density_mrc=density_mrc, resolution=resolution,

@@ -147,14 +147,13 @@ class GeometricTransformer(nn.Module):
         src_embeddings = self.embedding(src_points)
         ref_feats = self.in_proj(ref_feats)
         src_feats = self.in_proj(src_feats)
-        #xxy_渐进性掩码
         ref_feats, src_feats, scores_list = self.transformer(
             ref_feats,
             src_feats,
             ref_embeddings,
             src_embeddings,
-            points0=ref_points,  # 传递点坐标
-            points1=src_points,  # 传递点坐标
+            points0=ref_points,
+            points1=src_points,
             masks0=ref_masks,
             masks1=src_masks,
         )

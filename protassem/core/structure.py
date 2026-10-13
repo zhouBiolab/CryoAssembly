@@ -44,10 +44,6 @@ def pdb_to_cif(pdb_file, output_cif, chain_id=None):
 
 
 def logical_chain_ids():
-    """生成逻辑链号：A-Z、a-z，然后两字母 AA..ZZ。
-
-    用途是"链号去重重排"（可出现在 CIF 中，允许多字符）。
-    """
     base = list(string.ascii_uppercase) + list(string.ascii_lowercase)
     for c in base:
         yield c
@@ -57,12 +53,6 @@ def logical_chain_ids():
 
 
 def pdb_placeholder_ids():
-    """生成 PDB 单字符占位链号：A-Z、a-z、0-9（共 62 个）。
-
-    与 logical_chain_ids 是两个不同用途的池：PDB 的链号列只有一列，占位必须单字符，
-    因此保留数字占位、容量维持 62。数字占位对下游的影响见 tests/test_chain_ids.py（仅开发服务器保留）
-    的实测（读取/评分/USalign 已覆盖；DomainParser 未单独覆盖）。
-    """
     for c in list(string.ascii_uppercase) + list(string.ascii_lowercase) + list(string.digits):
         yield c
 
@@ -92,17 +82,6 @@ def write_structure_with_chain_map(input_file, chain_map, output_file):
 
 
 def cif_to_pdb_placeholders(cif_file, output_pdb):
-    """CIF -> PDB using single-char placeholder chain IDs (fitting ignores
-    chain IDs; PDB cannot hold multi-char IDs).
-
-    Returns {placeholder_id: real_id} so the real (possibly multi-char) IDs
-    can be restored when writing the final CIF. Reuses
-    write_structure_with_chain_map as the rename primitive.
-
-    Raises:
-        ValueError: 链数超过 PDB 单字符占位容量（当前 62，见 pdb_placeholder_ids）。
-            当前没有"超容量走纯 CIF"的替代通路，因此明确报错而不是截断。
-    """
     parser = MMCIFParser(QUIET=True)
     structure = parser.get_structure("s", str(cif_file))
     real_ids = [ch.id for ch in list(structure)[0]]
@@ -133,11 +112,6 @@ def extract_chain_id(filename):
 
 
 def _ca_by_residue(structure):
-    """收集 ``(链号, 残基号, 插入码) -> CA 原子``；只取第一个 model。
-
-    与 read_chain_ids/read_structure 一致只读第一个 model，避免不同 model 的
-    同键残基互相覆盖。
-    """
     atoms = {}
     model = next(structure.get_models())
     for chain in model:
@@ -151,19 +125,6 @@ def _ca_by_residue(structure):
 
 def align_by_resid(ref_file, mob_file, output_file, mob_chain_map=None,
                    min_pairs=3):
-    """按 (链号, 残基号, 插入码) 匹配 CA，把 mob 叠合到 ref。
-
-    Args:
-        ref_file: 参考结构（PDB/CIF）
-        mob_file: 待叠合结构
-        output_file: 叠合后的 mob 输出路径（按扩展名选 PDBIO/MMCIFIO）
-        mob_chain_map: mob 链号 -> ref 链号空间的映射（如占位链号 -> 真链号）。
-            只在构造匹配键时使用，不修改结构本身；None 表示两边同一空间。
-        min_pairs: 最少匹配对数，不足则不叠合
-
-    Returns:
-        bool: 是否完成叠合；匹配不足时返回 False 且不写文件。
-    """
     ref_struct = _get_parser(ref_file).get_structure("ref", str(ref_file))
     mob_struct = _get_parser(mob_file).get_structure("mob", str(mob_file))
 

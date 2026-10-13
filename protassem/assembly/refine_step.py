@@ -156,12 +156,6 @@ def _backfill_chains_as_domains(orch, fitted_domains):
 # ----------------------------------------------------------------------
 
 def _filter_fitted_domains(orch, fitted_domains):
-    """按 complex_min_cc 过滤 Step4 的输入域集。
-
-    fitted_domains/<chain>/*.cif 中 cc_mask < complex_min_cc 的已拟合域被剔除，
-    其余拷到 fitted_domains_filtered/ 作为枚举器输入（整链补回的域无 cc 记录，保留）。
-    无域被剔除时直接返回原目录。
-    """
     thr = getattr(orch, "complex_min_cc", 0.0)
     cc_by_path = {}
     for drecs in orch.domain_records.values():

@@ -74,10 +74,6 @@ log = logging.getLogger(__name__)
 # Voxel size configurations
 # ======================================================================
 
-# 2026-09-29：以下 5 个 config 是**当前实际执行**的集合（--configs all -> 0-4），
-# 每个 config 各配 Voxel / FPS 两种末层采样 = **10 种真实组合**。
-# 5 / 6 保留备用，默认不跑；要启用就把它们放回表里（或 --configs "0,1,2,3,4,5,6"）。
-# 注意：这个集合必须与 effective_sampling_config(voxel_table=...) 传入的表一致。
 VOXEL_SIZE_CONFIGS_NORMAL = {
     0: [2, 3.6, 6.48, 11.664],
     1: [1, 1, 3.6, 6.48],
@@ -103,10 +99,6 @@ VOXEL_SIZE_CONFIGS_MASK = {
 # ======================================================================
 
 def load_sample_points(file_path):
-    """读取点云文件，返回 index/point/vector/density 结构化数组。
-
-    格式契约与解析规则见 protassem.core.points_txt（单一实现）。
-    """
     return read_point_cloud_file(file_path)
 
 
@@ -166,18 +158,6 @@ def preprocess_point_cloud_data(file_path, point_limit=65000, is_mask_file=False
 # ======================================================================
 
 def effective_sampling_config(config_id=None, sampling_method=None, voxel_table=None):
-    """多尺度配置（体素尺寸列表 + 最后一层采样方式）。
-
-    `config_id` / `sampling_method` / `voxel_table` 显式传入时按传入值解析；全部为空时回退到
-    pareconv 的模块级全局（历史行为，恒为 config 0 + voxel —— 因为本仓库从不设置那些全局量）。
-
-    **2026-09-29 修复**：此前该函数无条件读全局，导致 `config_ids × ["voxel","fps"]` 的循环虽然跑了
-    14 次推理，几何却完全相同、`overlap` 完全并列，`max()` 取首个 -> 台账里 148 个候选全是 config 0 + voxel。
-    现在由调用方把循环变量传进来，多 config 才真正生效。
-
-    注意：`voxel_table` 必须与生成 `config_ids` 的那张表一致。pareconv 自带的
-    `VOXEL_SIZE_CONFIGS` 只有 0-4，用它查 5/6 会静默回退到 config 0。
-    """
     if config_id is None or sampling_method is None:
         global_id, global_sampling = data_mask_module.get_current_config()
         if config_id is None:
@@ -190,7 +170,7 @@ def effective_sampling_config(config_id=None, sampling_method=None, voxel_table=
     return [float(value) for value in voxel_sizes], sampling_method
 
 
-@torch.no_grad()   # T03：推理全程关闭梯度，不建计算图（权重/数值路径不变）
+@torch.no_grad()
 def process_single_pair(src_data, tgt_data, source_path, target_path,
                         chain_pdb_path, model, cfg, config_id, sampling_method,
                         output_dir=None, use_mask=False, masks=None,
@@ -198,14 +178,6 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
                         original_target_data=None, geometry_cache=None,
                         inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
                         tail_pipeline=None, voxel_table=None):
-    """Run PARENet inference on one source-target pair.
-
-    只有本函数调用模型；@torch.no_grad() 覆盖"单侧几何构建 → 编码 → 配准 → 后处理"全路径。
-    geometry_cache：T05 的单侧几何缓存（None = 关闭；由服务进程或调用方显式拥有）。
-    inference_mode：joint = 联合布局 + `forward`（默认，旧数值）；split = 单侧编码 + 双侧配准。
-    encoding_cache：T07 的源编码缓存（仅 split 模式使用；None = 关闭）。
-    tail_pipeline：T09 的 CPU 尾部流水线（None = 就地执行后处理与写盘）。
-    """
     result = {
         "source_file": os.path.basename(source_path),
         "target_file": os.path.basename(target_path),
@@ -253,11 +225,6 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
         scale = max(np.linalg.norm(ref_norm, axis=1).max(),
                     np.linalg.norm(src_norm, axis=1).max()).astype(np.float32)
 
-        # T04：源/目标各自构建单侧几何（多尺度点 + 邻居），再由适配层拼成联合布局。
-        # T05：单侧几何走有界 CPU 缓存（cache=None 或 fps 采样时不查不存，构建代码同一份）。
-        # 生效采样配置来自 pareconv 的模块级全局变量（T02 实测：标签 configs=all 实际只跑
-        # config 0 + voxel），这里显式读出、传参并记录，不再依赖隐式全局。
-        # 2026-09-29：按本次循环的 config/sampling 解析，不再无条件读全局
         voxel_sizes, effective_sampling = effective_sampling_config(
             config_id, sampling_method, voxel_table)
         num_neighbors = cfg.backbone.num_neighbors
@@ -273,7 +240,6 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
         ref_geometry = ref_acquired.geometry
         src_geometry = src_acquired.geometry
 
-        # T06：inference_mode="split" 时走单侧编码（可缓存）+ 双侧配准；"joint" 时走旧联合布局 + forward
         joint_reference = inference_mode == "joint"
         data_dict = None
         if joint_reference:
@@ -285,7 +251,6 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
             output_dict = model(data_dict, output_fields=INFERENCE_OUTPUT_FIELDS)
         else:
             ref_encoded = model.encode_cloud(ref_geometry, scale)
-            # T07：源编码命中则跳过源 backbone（目标编码不缓存，只保留当前掩码结果）
             src_encoded = None
             if encoding_cache is not None and encoding_cache.enabled:
                 src_encoded = encoding_cache.get(src_geometry, scale)
@@ -299,22 +264,18 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
         T_est = output_dict["estimated_transform"]
         pred_R = T_est[:3, :3].cpu().numpy()
         pred_t = T_est[:3, 3].cpu().numpy()
-        # 只保留下游必要的 CPU 结果（GPU 张量随 output_dict 在本函数返回后释放）
         ref_count = len(output_dict["ref_points"])
         src_count = len(output_dict["src_points"])
 
         def finish_pair():
-            """T09 尾部任务：后处理 + 写盘（确定性，不消耗随机数）。"""
             src4 = apply_transformation(src_for_ov, pred_R, pred_t)
             _, _, corr = compute_overlap(ref_for_ov, src4, 1.5)
-            # 分母用完整（未掩码）目标点云 ref_for_ov，而非源点云
             overlap_value = corr.shape[1] / len(ref_for_ov) \
                 if corr is not None and corr.size else 0.0
             if chain_pdb_path and os.path.exists(chain_pdb_path):
                 try:
                     pred_pdb = generate_output_pdb_path(
                         source_path, config_id, sampling_method, output_dir, mask_suffix)
-                    # 位姿在点云质心系求解：写出时以 c_src 为旋转中心、并把平移补到 c_ref
                     t_corrected = pred_t + (c_ref.astype(np.float32) - c_src.astype(np.float32))
                     transform_pdb(chain_pdb_path, pred_R, t_corrected, pred_pdb,
                                   center=c_src.astype(np.float32))
@@ -324,14 +285,11 @@ def process_single_pair(src_data, tgt_data, source_path, target_path,
             result.update({"overlap": overlap_value,
                            "ref_points": ref_count, "src_points": src_count})
 
-        # T09：尾部交给预取 worker 与下一次配准的 GPU 工作重叠；tail_pipeline=None 时就地执行
         if tail_pipeline is not None:
             tail_pipeline.submit(finish_pair)
         else:
             finish_pair()
 
-        # T03：不再递归 release_cuda（把每个张量都拷成 numpy）也不再逐对 empty_cache——
-        # data_dict/output_dict 是本函数局部变量，返回即结束引用，显存由缓存分配器复用。
 
     except Exception as e:
         result["error"] = str(e)
@@ -392,26 +350,25 @@ def make_parser():
     p.add_argument("--min_point_distance_factor", type=float, default=0.32)
     p.add_argument("--save_masks", action="store_true")
     p.add_argument("--geometry-cache-mb", type=int, default=DEFAULT_GEOMETRY_CACHE_MB,
-                   help="单侧几何 CPU 缓存容量（MiB，0 = 关闭；默认 %d）"
+                   help='Single-cloud CPU geometry cache capacity (MiB, 0 disables, default %d)'
                         % DEFAULT_GEOMETRY_CACHE_MB)
     p.add_argument("--tail-pipeline", dest="tail_pipeline", action="store_true",
                    default=DEFAULT_TAIL_PIPELINE,
-                   help="启用 CPU 尾部流水线（T09；后处理/写盘与下一次配准的 GPU 工作重叠）")
+                   help='Enable CPU tail pipelining; overlap postprocessing/writing with the next GPU registration')
     p.add_argument("--no-tail-pipeline", dest="tail_pipeline", action="store_false",
-                   help="关闭 CPU 尾部流水线（就地执行后处理与写盘）")
+                   help='Disable CPU tail pipelining; process and write output in place')
     p.add_argument("--hypothesis-chunk", type=int, default=DEFAULT_HYPOTHESIS_CHUNK,
-                   help="位姿假设评分分块大小（T08；0 = 原整批路径，默认 %d）"
+                   help='Hypothesis scoring chunk size (0 = unchunked, default %d)'
                         % DEFAULT_HYPOTHESIS_CHUNK)
     p.add_argument("--encoding-cache-mb", type=int, default=DEFAULT_ENCODING_CACHE_MB,
-                   help="源编码缓存 GPU 预算（MiB，0 = 关闭；仅 split 模式；默认 %d）"
+                   help='Source encoding cache GPU budget (MiB, 0 disables; split mode only; default %d)'
                         % DEFAULT_ENCODING_CACHE_MB)
     p.add_argument("--inference-mode", choices=INFERENCE_MODES, default=DEFAULT_INFERENCE_MODE,
-                   help="推理路径：joint = 联合布局 + forward（默认，旧数值）；"
-                        "split = 单侧编码 + 双侧配准（要求关闭 TF32）")
+                   help='Inference mode: joint = combined layout and forward (default); split = separate encoding and pair registration (requires TF32 disabled)')
     p.add_argument("--allow-tf32", dest="allow_tf32", action="store_true", default=DEFAULT_ALLOW_TF32,
-                   help="允许 TF32（默认跟随推理模式：joint 允许、split 不允许）")
+                   help='Allow TF32 (default follows inference mode: joint enabled, split disabled)')
     p.add_argument("--no-allow-tf32", dest="allow_tf32", action="store_false",
-                   help="关闭 TF32（数值与张量形状无关；split 模式必须）")
+                   help='Disable TF32; required by split mode')
     p.add_argument("--server", action="store_true",
                    help="persistent server mode: load model once, serve stdin requests")
     return p
@@ -426,11 +383,6 @@ _CFG = None
 
 
 def _get_model(weights, allow_tf32, hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK):
-    """Load the PARENet model once and cache it (model, cfg).
-
-    TF32 策略与 T08 假设分块都在**构造模型之前**设定（早于任何前向）；
-    取值由调用方按 RuntimeConfig 解析，本函数只负责应用。
-    """
     global _MODEL, _CFG
     if _MODEL is None:
         policy = apply_tf32_policy(allow_tf32)
@@ -456,20 +408,6 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                   inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
                   hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK,
                   tail_pipeline_enabled=DEFAULT_TAIL_PIPELINE, request_id=None):
-    """Run PARENet inference for one source/target pair.
-
-    Algorithm identical to the original main(); only parameterized so the model
-    can be reused and an optional stop_file allows early termination (the
-    in-process equivalent of killing the old subprocess).
-
-    geometry_cache：T05 单侧几何缓存（None = 关闭）；由调用方显式传入并拥有。
-    allow_tf32    ：TF32 策略（None = 跟随 inference_mode；由调用方解析）。
-    inference_mode："joint"（联合布局 + forward，默认）或 "split"（单侧编码 + 双侧配准）。
-    encoding_cache：T07 源编码缓存（None = 关闭；仅 split 模式使用）。
-    hypothesis_chunk：T08 假设评分分块（0 = 原路径；模型构造前应用，需在首次加载时给出）。
-    tail_pipeline_enabled：T09 CPU 尾部流水线开关（默认关闭；结果与顺序必须一致）。
-    request_id    ：O6 候选台账的请求身份（客户端生成；缺省时服务端自造一个）。
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -518,7 +456,6 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
 
     # inference
     all_results = []
-    # T09：尾部流水线（深度 1）。所有"消费结果"的位置必须先 wait()，见下面各点
     tail_pipeline = TailPipeline(enabled=tail_pipeline_enabled, name="parenet-tail")
 
     def _drain_tail(stage):
@@ -529,13 +466,6 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
 
     def _publish(candidate_id, results, name=None, overlap=None, source=None,
                  mask_level=False):
-        """发布一个候选的终态（O6）：ok / filtered / error 三态必须显式。
-
-        **有成功候选就发布 ok** —— 同一个 mask 内个别评估抛异常不再掩盖已经得到的成功
-        结果；失败记录仍保留在结果集里参与统计。没有成功候选且有执行错误时发布 error：
-        `mask_level=True`（掩码级评估）带 `reason=MASK_ERROR_REASON`，客户端跳过它且不会
-        让请求级结束状态变成 error；其余执行失败计入 `ledger_errors`，请求级仍报 error。
-        """
         nonlocal skipped_mask_errors
         errors = [r.get("error") for r in results if r.get("error")]
         if name and os.path.exists(name):
@@ -589,16 +519,12 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                             all_results.append(r)
                         except Exception as e:
                             log.error("Config %d-%s crashed: %s", cid, sm, e)
-                            # 异常在掩码结果集与全局结果集**各记一次**（不重复追加）：
-                            # 台账里的候选终态由 _publish 统一决定。
                             failure_record = {"error": str(e), "config_id": cid,
                                               "sampling_method": sm}
                             mask_results.append(failure_record)
                             all_results.append(failure_record)
-                _drain_tail("mask_best")      # 消费本掩码结果前必须等尾部完成
+                _drain_tail("mask_best")
                 best = process_single_mask_optimally(mask_results)
-                # O6：id = 掩码在 mask_data_list 中的序号（稳定生成顺序）；
-                # 改名/删除已在上一步完成，此处发布的名字不会再变
                 _publish(mask_index, mask_results,
                          name=(best or {}).get("pred_pdb_path"),
                          overlap=(best or {}).get("overlap"),
@@ -617,7 +543,7 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                 log.info("  %d. %s overlap=%.6f", i, pdb, r.get("overlap", 0))
         else:
             logged = 0
-            pending = []          # (source, result) 按生成顺序；**改名之后**才发布
+            pending = []
             for cid in config_ids:
                 if _stopped():
                     break
@@ -637,10 +563,8 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                     except Exception as e:
                         log.error("Config %d-%s crashed: %s", cid, sm, e)
                         r = {"error": str(e)}
-                    # O6：无掩码分支用自己的稳定生成顺序（config 外层、sampling 内层）编号；
-                    # P1-4：这里只登记，发布推迟到 rename 之后（见循环外）
                     pending.append(({"config": cid, "sampling": sm}, r))
-                _drain_tail("ranking")        # 排名与日志都要读结果
+                _drain_tail("ranking")
                 while logged < len(all_results):
                     done = all_results[logged]
                     logged += 1
@@ -652,14 +576,11 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
             successful = [r for r in all_results if not r.get("error")
                           and r.get("overlap") is not None]
             if successful:
-                rename_pdb_files_by_ranking(successful)   # 会回写 pred_pdb_path
-            # P1-4：发布必须发生在**尾部任务完成且最终命名之后** —— 台账里的名字此后不再变化；
-            # 旧实现边算边发布，改名后台账指向失效文件，tail 开启时还可能把未写出的候选记成 filtered。
+                rename_pdb_files_by_ranking(successful)
             for candidate_id, (candidate_source, result) in enumerate(pending):
                 _publish(candidate_id, [result], name=result.get("pred_pdb_path"),
                          overlap=result.get("overlap"), source=candidate_source)
 
-        # summary（读结果前必须等尾部完成）
         _drain_tail("summary")
     except BaseException as exc:
         failure = exc
@@ -668,15 +589,7 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
         try:
             tail_pipeline.close()
         except Exception as e:
-            log.error("尾部流水线关闭失败：%s", e)
-        # O6：结束记录是唯一权威的结束标记；失败必须显式，不能被当成正常结束。
-        # 优先级（明确写死，不靠默认）：
-        #   1) 请求本身抛异常               -> error
-        #   2) 客户端主动早停               -> cancelled（客户端已停止消费，其后候选不再有意义）
-        #   3) 存在**非掩码级**候选执行失败 -> error（请求跑完了但产出不完整）
-        #   4) 其余                         -> ok
-        # 掩码级评估失败在 _publish 里带 reason=MASK_ERROR_REASON 发布，客户端跳过它，
-        # 因此不进入 ledger_errors，也不改变本状态。
+            log.error('Tail pipeline shutdown failed: %s', e)
         try:
             if failure is not None:
                 ledger.finish("error", error="%s: %s" % (type(failure).__name__, failure))
@@ -684,12 +597,12 @@ def run_inference(target, source, chain_pdb, output_dir, weights,
                 ledger.finish("cancelled")
             elif ledger_errors["count"]:
                 ledger.finish("error",
-                              error="%d 个候选执行失败，首个：%s"
+                              error='%d candidates failed; first error: %s'
                                     % (ledger_errors["count"], ledger_errors["first"]))
             else:
                 ledger.finish("ok")
         except Exception as e:
-            log.error("候选台账结束记录写入失败：%s", e)
+            log.error('Failed to write ledger end record: %s', e)
     ok = [r for r in all_results if not r.get("error") and r.get("overlap") is not None]
     fail = [r for r in all_results if r.get("error")]
     log.info("Total: %d, Success: %d, Failed: %d", len(all_results), len(ok), len(fail))
@@ -709,18 +622,6 @@ def _server_loop(weights, geometry_cache_mb=DEFAULT_GEOMETRY_CACHE_MB,
                  encoding_cache_mb=DEFAULT_ENCODING_CACHE_MB,
                  hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK,
                  tail_pipeline=DEFAULT_TAIL_PIPELINE):
-    """Read one JSON request per stdin line; signal completion via _DONE file.
-
-    Request keys: target, source, chain_pdb, output_dir, use_mask, configs,
-                  mask_radius_factor, min_point_distance_factor
-    Completion / early-stop are communicated through files in output_dir
-    (_PARENET_DONE / _PARENET_STOP) — stdout/stderr are NOT used for IPC,
-    so the client never blocks on a full pipe.
-
-    T05：几何缓存由**本服务进程拥有**，跨请求复用（容量以 MiB 计，0 = 关闭）。
-    T06：推理路径与 TF32 策略在加载模型时设定（默认 joint + 框架默认精度，即旧数值）。
-    T07：源编码缓存（GPU，仅 split 模式）同样由本进程拥有、跨请求复用。
-    """
     resolved_tf32 = effective_allow_tf32(inference_mode, allow_tf32)
     model, _cfg = _get_model(weights, resolved_tf32, hypothesis_chunk)  # preload once
     geometry_cache = GeometryCache(int(geometry_cache_mb) * 1024 * 1024) \

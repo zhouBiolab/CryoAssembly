@@ -1,4 +1,3 @@
-# 推理路径只使用模型与匹配参数；数据集/训练相关配置不参与推理。
 import os
 import os.path as osp
 import argparse
@@ -31,7 +30,6 @@ _C.registration_dir = osp.join(_C.output_dir, 'registration')
 # ensure_dir(_C.feature_dir)  # disabled: not needed for inference
 # ensure_dir(_C.registration_dir)  # disabled: not needed for inference
 
-# data（推理不使用；仅保留仓库相对的元数据目录，供 vendored 数据集脚本参考）
 _C.data = edict()
 _C.data.metadata_root = osp.join(_C.root_dir, 'data', '3DMatch', 'metadata')
 
@@ -44,8 +42,8 @@ _C.train.use_augmentation = True
 _C.train.augmentation_noise =0.02
 _C.train.augmentation_rotation = 1.0
 _C.train.augmentation_crop = True
-_C.train.point_keep_ratio = 0.7 #这是匹配率过高情况 进行crop \
-_C.train.matching_radius = 2#3dmatch 0.1 init_voxel_size = 0.025 先试试2
+_C.train.point_keep_ratio = 0.7
+_C.train.matching_radius = 2
 
 # test data
 _C.test = edict()
@@ -82,7 +80,7 @@ _C.optim.grad_acc_steps = 1
 _C.backbone = edict()
 _C.backbone.num_stages = 4
 _C.backbone.num_neighbors = [35] * _C.backbone.num_stages  # we use constant neighbors
-_C.backbone.init_voxel_size =1#初始2 4层相当于下采样三次# 3dmatch 0.025 0.006 2
+_C.backbone.init_voxel_size =1
 _C.backbone.subsample_ratio =1.8#1.3 1.8 :0.998
 _C.backbone.kernel_size = 4
 _C.backbone.share_nonlinearity = False
@@ -107,7 +105,7 @@ _C.coarse_matching.dual_normalization = True
 _C.geotransformer = edict()
 _C.geotransformer.input_dim =768
 
-_C.geotransformer.hidden_dim = 72#72 原本96
+_C.geotransformer.hidden_dim = 72
 _C.geotransformer.output_dim = 128#128
 _C.geotransformer.num_heads = 4
 #_C.geotransformer.blocks = ['self', 'cross', 'self', 'cross', 'self', 'cross']
@@ -148,7 +146,7 @@ _C.coarse_loss.positive_overlap = 0.1
 
 # loss - Fine level
 _C.fine_loss = edict()
-_C.fine_loss.positive_radius = 3#2.0#太
+_C.fine_loss.positive_radius = 3
 _C.fine_loss.negative_radius = 5.5#6.0#???
 _C.fine_loss.positive_margin = 0.1
 _C.fine_loss.negative_margin = 1.4

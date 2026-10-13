@@ -20,7 +20,6 @@ def delete_all_files_in_dir(directory, max_workers=8):
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         executor.map(delete_file, files_to_delete)
 
-# 示例用法
 if __name__ == "__main__":
     target_dir = "/xiangyux/AF3-30000"
     delete_all_files_in_dir(target_dir)

@@ -488,7 +488,6 @@ def iss(data, gamma21=0.6, gamma32=0.6, KDTree_radius=6, NMS_radius=6, max_num=1
 
             s = np.linalg.svd(cov, compute_uv=False)
 
-            # 稳定性判断
             if np.any(np.isnan(s)) or np.any(np.isinf(s)):
                 continue
             if s[0] < 1e-6 or s[1] < 1e-6:
@@ -606,7 +605,6 @@ class EpochBasedTrainer(BaseTrainer):
             sigmma = 4.5
             data_dict = to_cuda(data_dict)
 
-            # 点数判断
             ref_length_d = data_dict['lengths'][-2][0].item()
             ref_length_c = data_dict['lengths'][-1][0].item()
 
@@ -617,17 +615,14 @@ class EpochBasedTrainer(BaseTrainer):
             ref_points_co = data_dict['points'][-1][:ref_length_c][:, :3]
             src_points_co = data_dict['points'][-1][ref_length_c:][:, :3]
 
-            # 提取关键点（numpy）
             keypoint_ref = iss(ref_points_d, gamma21=0.6, gamma32=0.6, KDTree_radius=0.15, NMS_radius=0.15,
                                max_num=1)
             keypoint_src = iss(src_points_d, gamma21=0.6, gamma32=0.6, KDTree_radius=0.15, NMS_radius=0.15,
                                max_num=1)
 
-            # device 和 dtype 一致性
             device = ref_points_co.device
             dtype = ref_points_co.dtype
 
-            # 安全转换为 tensor
             has_ref = keypoint_ref is not None and len(keypoint_ref) > 0
             has_src = keypoint_src is not None and len(keypoint_src) > 0
 
@@ -636,7 +631,6 @@ class EpochBasedTrainer(BaseTrainer):
             new_ref_len = ref_points_co.size(0)
             new_src_len = src_points_co.size(0)
 
-            # 处理 ref 侧
 
             if has_ref:
                 kp_ref_t = torch.from_numpy(keypoint_ref).to(device=device, dtype=dtype)
@@ -648,7 +642,6 @@ class EpochBasedTrainer(BaseTrainer):
                     new_ref_len = final_ref_pts.size(0)
                     del dist_r, ref_mask_s
 
-            # 处理 src 侧
             if has_src:
                 kp_src_t = torch.from_numpy(keypoint_src).to(device=device, dtype=dtype)
                 assert kp_src_t.shape[1] == src_points_co.shape[1], "Src dimension mismatch"
@@ -660,7 +653,6 @@ class EpochBasedTrainer(BaseTrainer):
                     del dist_s, src_mask_s
 
 
-            # 替换 data_dict['points'][-1]
             if final_ref_pts.size(0) > 0 and final_src_pts.size(0) > 0:
                 merged = torch.cat([final_ref_pts, final_src_pts], dim=0)
             elif final_ref_pts.size(0) > 0:
@@ -668,9 +660,8 @@ class EpochBasedTrainer(BaseTrainer):
             elif final_src_pts.size(0) > 0:
                 merged = final_src_pts
             else:
-                raise RuntimeError("关键点提取失败：ref/src 点均为空")
+                raise RuntimeError('Keypoint extraction failed: both ref/src point clouds are empty')
 
-            # 保持原 device/dtype
             merged = merged.to(device=data_dict['points'][-1].device, dtype=data_dict['points'][-1].dtype)
             data_dict['points'][-1] = merged
             data_dict['lengths'][-1][0] = new_ref_len
@@ -681,7 +672,6 @@ class EpochBasedTrainer(BaseTrainer):
             del ref_points_co, src_points_co
             del keypoint_ref, keypoint_src
 
-            # 无论如何，都要记录 ref_length_iss、src_length_iss
             #data_dict['ref_length_iss'] = new_ref_len
             #data_dict['src_length_iss'] = new_src_len
 
@@ -693,39 +683,6 @@ class EpochBasedTrainer(BaseTrainer):
             del data, points_c_iput
 
 
-            '''
-            
-            ######4.22——xxy-混合点以及密度聚类-旋转不变性描述符
-            norm_ref = data_dict['ref_vectors']
-            norm_src = data_dict['src_vectors']
-            ref_length_c = data_dict['lengths'][-1][0].item()
-            ref_length_f = data_dict['lengths'][1][0].item()
-            ref_length = data_dict['lengths'][0][0].item()
-            points = data_dict['points'][0][:, :3].detach()
-            points_c = data_dict['points'][-1][:, :3].detach()
-            ref_points = points[:ref_length]
-            src_points = points[ref_length:]
-            ref_points_c = points_c[:ref_length_c]
-            src_points_c = points_c[ref_length_c:]
-            ref_points_c = ref_points_c.detach().cpu().numpy()
-            src_points_c = src_points_c.detach().cpu().numpy()
-            ref_points = ref_points.detach().cpu().numpy()
-            src_points = src_points.detach().cpu().numpy()
-            norm_src = norm_src.detach().cpu().numpy()
-            norm_ref = norm_ref.detach().cpu().numpy()
-            ref_shot = compute_shot_descriptor(keypoints = ref_points_c, cloud_points = ref_points,normals=norm_ref,radius=33,debug_mode=False, disable_progress_bars=True)
-            src_shot = compute_shot_descriptor(keypoints=src_points_c, cloud_points=src_points, normals=norm_src,
-                                               radius=33, debug_mode = False, disable_progress_bars=True)
-
-            ref_shot_t = torch.from_numpy(ref_shot).to(device=device, dtype=dtype)
-            src_shot_t = torch.from_numpy(src_shot).to(device=device, dtype=dtype)
-
-            # 3. 写入 data_dict
-            data_dict['ref_shot'] = ref_shot_t  # [N_ref, 352]
-            data_dict['src_shot'] = src_shot_t  # [N_src, 352]
-
-            #print("train_shot_ref", src_shot)
-            '''
 
 
 
@@ -793,7 +750,6 @@ class EpochBasedTrainer(BaseTrainer):
             sigmma = 4.5
             data_dict = to_cuda(data_dict)
 
-            # 点数判断
             ref_length_d = data_dict['lengths'][-2][0].item()
             ref_length_c = data_dict['lengths'][-1][0].item()
 
@@ -804,17 +760,14 @@ class EpochBasedTrainer(BaseTrainer):
             ref_points_co = data_dict['points'][-1][:ref_length_c][:, :3]
             src_points_co = data_dict['points'][-1][ref_length_c:][:, :3]
 
-            # 提取关键点（numpy）
             keypoint_ref = iss(ref_points_d, gamma21=0.6, gamma32=0.6, KDTree_radius=0.15, NMS_radius=0.15,
                                max_num=1)#6,6
             keypoint_src = iss(src_points_d, gamma21=0.6, gamma32=0.6, KDTree_radius=0.15, NMS_radius=0.15,
                                max_num=1)
 
-            # device 和 dtype 一致性
             device = ref_points_co.device
             dtype = ref_points_co.dtype
 
-            # 安全转换为 tensor
             has_ref = keypoint_ref is not None and len(keypoint_ref) > 0
             has_src = keypoint_src is not None and len(keypoint_src) > 0
 
@@ -823,7 +776,6 @@ class EpochBasedTrainer(BaseTrainer):
             new_ref_len = ref_points_co.size(0)
             new_src_len = src_points_co.size(0)
 
-            # 处理 ref 侧
             if has_ref:
                 kp_ref_t = torch.from_numpy(keypoint_ref).to(device=device, dtype=dtype)
                 assert kp_ref_t.shape[1] == ref_points_co.shape[1], "Ref dimension mismatch"
@@ -835,7 +787,6 @@ class EpochBasedTrainer(BaseTrainer):
 
                     del dist_r, ref_mask_s
 
-            # 处理 src 侧
 
             if has_src:
                 kp_src_t = torch.from_numpy(keypoint_src).to(device=device, dtype=dtype)
@@ -847,7 +798,6 @@ class EpochBasedTrainer(BaseTrainer):
                     new_src_len = final_src_pts.size(0)
                     del dist_s,src_mask_s
 
-            # 替换 data_dict['points'][-1]
             if final_ref_pts.size(0) > 0 and final_src_pts.size(0) > 0:
                 merged = torch.cat([final_ref_pts, final_src_pts], dim=0)
             elif final_ref_pts.size(0) > 0:
@@ -855,9 +805,8 @@ class EpochBasedTrainer(BaseTrainer):
             elif final_src_pts.size(0) > 0:
                 merged = final_src_pts
             else:
-                raise RuntimeError("关键点提取失败：ref/src 点均为空")
+                raise RuntimeError('Keypoint extraction failed: both ref/src point clouds are empty')
 
-            # 保持原 device/dtype
             merged = merged.to(device=data_dict['points'][-1].device, dtype=data_dict['points'][-1].dtype)
             data_dict['points'][-1] = merged
             data_dict['lengths'][-1][0] = new_ref_len
@@ -870,7 +819,6 @@ class EpochBasedTrainer(BaseTrainer):
 
 
 
-            # 无论如何，都要记录 ref_length_iss、src_length_iss
             #data_dict['ref_length_iss'] = new_ref_len
             #data_dict['src_length_iss'] = new_src_len
 
@@ -881,36 +829,6 @@ class EpochBasedTrainer(BaseTrainer):
                                       )
             data_dict.update(data)
             del data, points_c_iput
-            '''
-            
-            norm_ref = data_dict['ref_vectors']
-            norm_src = data_dict['src_vectors']
-            ref_length_c = data_dict['lengths'][-1][0].item()
-            ref_length_f = data_dict['lengths'][1][0].item()
-            ref_length = data_dict['lengths'][0][0].item()
-            points = data_dict['points'][0][:, :3].detach()
-            points_c = data_dict['points'][-1][:, :3].detach()
-            ref_points = points[:ref_length]
-            src_points = points[ref_length:]
-            ref_points_c = points_c[:ref_length_c]
-            src_points_c = points_c[ref_length_c:]
-            ref_points_c = ref_points_c.detach().cpu().numpy()
-            src_points_c = src_points_c.detach().cpu().numpy()
-            ref_points = ref_points.detach().cpu().numpy()
-            norm_ref = norm_ref.detach().cpu().numpy()
-            src_points = src_points.detach().cpu().numpy()
-            norm_src = norm_src.detach().cpu().numpy()
-            ref_shot = compute_shot_descriptor(keypoints = ref_points_c, cloud_points = ref_points,normals=norm_ref,radius=33,debug_mode=False, disable_progress_bars=True)
-            src_shot = compute_shot_descriptor(keypoints=src_points_c, cloud_points=src_points, normals=norm_src,
-                                               radius=33, debug_mode=False, disable_progress_bars=True)
-
-            ref_shot_t = torch.from_numpy(ref_shot).to(device=device, dtype=dtype)
-            src_shot_t = torch.from_numpy(src_shot).to(device=device, dtype=dtype)
-
-            # 3. 写入 data_dict
-            data_dict['ref_shot'] = ref_shot_t  # [N_ref, 352]
-            data_dict['src_shot'] = src_shot_t  # [N_src, 352]
-            '''
             self.before_val_step(self.epoch, self.inner_iteration, data_dict)
             timer.add_prepare_time()
             output_dict, result_dict = self.val_step(self.epoch, self.inner_iteration, data_dict)

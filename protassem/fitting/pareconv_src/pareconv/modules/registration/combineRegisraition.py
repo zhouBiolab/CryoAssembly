@@ -14,21 +14,8 @@ from pareconv.modules.registration.Correspondence_regenerate_v2 import Regenerat
 def compute_overlap_torch(src: torch.Tensor,
                           tgt: torch.Tensor,
                           search_radius: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    计算两个点云之间的重叠区域（torch tensor版本），并返回：
-      - has_corr_src: 源点云中有对应匹配的点（布尔张量）
-      - has_corr_tgt: 目标点云中有对应匹配的点（布尔张量）
-      - src_tgt_corr: 形状为 (2, n_corr) 的张量，其中每列 [i, j] 表示源点 i 与目标点 j 互为匹配
-
-    Args:
-        src: 源点云 (N, 3) 或 (B, N, 3)
-        tgt: 目标点云 (M, 3) 或 (B, M, 3)
-        search_radius: 搜索半径
-    """
     try:
-        # 处理batch维度
         if src.dim() == 3:
-            # 假设batch size为1，去掉batch维度
             src = src.squeeze(0)
         if tgt.dim() == 3:
             tgt = tgt.squeeze(0)
@@ -37,39 +24,31 @@ def compute_overlap_torch(src: torch.Tensor,
         src_size = src.shape[0]
         tgt_size = tgt.shape[0]
 
-        # 计算距离矩阵
         # src: (N, 3), tgt: (M, 3)
         # distances: (N, M)
         distances = torch.cdist(src, tgt, p=2)
 
-        # 找到每个目标点的最近源点
         tgt_corr = torch.full((tgt_size,), -1, dtype=torch.long, device=device)
         tgt_min_dist, tgt_min_idx = torch.min(distances, dim=0)  # (M,)
         valid_tgt = tgt_min_dist < search_radius
         tgt_corr[valid_tgt] = tgt_min_idx[valid_tgt]
 
-        # 找到每个源点的最近目标点
         src_corr = torch.full((src_size,), -1, dtype=torch.long, device=device)
         src_min_dist, src_min_idx = torch.min(distances, dim=1)  # (N,)
         valid_src = src_min_dist < search_radius
         src_corr[valid_src] = src_min_idx[valid_src]
 
-        # 找到互相匹配的点对
         src_indices = torch.arange(src_size, device=device)
         mutual = torch.zeros(src_size, dtype=torch.bool, device=device)
 
-        # 检查互相匹配：对于每个有效的源点，检查其对应的目标点是否也指向它
         valid_src_mask = src_corr >= 0
         if valid_src_mask.any():
-            # 获取有效源点的目标点对应关系
             valid_src_indices = src_indices[valid_src_mask]
             valid_tgt_indices = src_corr[valid_src_mask]
 
-            # 检查这些目标点是否也指向相应的源点
             mutual_mask = tgt_corr[valid_tgt_indices] == valid_src_indices
             mutual[valid_src_mask] = mutual_mask
 
-        # 构建对应关系矩阵
         mutual_indices = torch.nonzero(mutual, as_tuple=False).squeeze(-1)
         if mutual_indices.numel() > 0:
             src_tgt_corr = torch.stack([mutual_indices, src_corr[mutual_indices]], dim=0)
@@ -82,56 +61,32 @@ def compute_overlap_torch(src: torch.Tensor,
         return has_corr_src, has_corr_tgt, src_tgt_corr
 
     except Exception as e:
-        print(f"计算重叠率时出错: {e}")
+        print(f"Overlap calculation failed: {e}")
         return None, None, None
 
 
 def extract_mutual_correspondences(src: torch.Tensor,
                                    tgt: torch.Tensor,
                                    search_radius: float) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    提取两个点云之间的互相对应点对
-
-    Args:
-        src: 源点云 (N, 3) 或 (B, N, 3)
-        tgt: 目标点云 (M, 3) 或 (B, M, 3)
-        search_radius: 搜索半径
-
-    Returns:
-        src_corr_points: 源点云中的对应点 (K, 3)
-        tgt_corr_points: 目标点云中的对应点 (K, 3)
-    """
     has_corr_src, has_corr_tgt, src_tgt_corr = compute_overlap_torch(src, tgt, search_radius)
 
     if src_tgt_corr is None or src_tgt_corr.shape[1] == 0:
-        # 没有找到对应关系，返回空张量
         device = src.device
         return torch.empty((0, 3), device=device), torch.empty((0, 3), device=device)
 
-    # 处理batch维度
     if src.dim() == 3:
         src = src.squeeze(0)
     if tgt.dim() == 3:
         tgt = tgt.squeeze(0)
 
-    # 提取对应点
-    src_indices = src_tgt_corr[0]  # 源点索引
-    tgt_indices = src_tgt_corr[1]  # 目标点索引
+    src_indices = src_tgt_corr[0]
+    tgt_indices = src_tgt_corr[1]
 
     src_corr_points = src[src_indices].unsqueeze(0)
     tgt_corr_points = tgt[tgt_indices].unsqueeze(0)
 
     return src_corr_points, tgt_corr_points
 def get_rotation_from_transform(transform: torch.Tensor) -> torch.Tensor:
-    """
-    从刚性变换矩阵中提取旋转部分。
-
-    Args:
-        transform: (4,4) 或 (B,4,4) 的刚性变换矩阵
-
-    Returns:
-        rotation: (3,3) 或 (B,3,3) 的旋转矩阵
-    """
     if transform.ndim == 2:
         return transform[:3, :3]
     elif transform.ndim == 3:
@@ -143,32 +98,16 @@ def rotate_equivariant_feats(
     re_feats: torch.Tensor,
     lgr_transform: torch.Tensor
 ) -> torch.Tensor:
-    """
-    只把 LGR 的旋转作用到等变特征上（去掉平移）。
-
-    Args:
-        re_feats: (B, K, D, 3)，等变特征的 xyz 分量在最后一维
-        lgr_transform: (B, 4, 4) 或 (4, 4)，LGR 输出的刚性变换
-
-    Returns:
-        re_feats_rot: (B, K, D, 3)，旋转后的等变特征
-    """
-    # 提取旋转
     R = get_rotation_from_transform(lgr_transform)  # (3,3) or (B,3,3)
 
     B, K, D, _ = re_feats.shape
-    # 拉平成 (B, K*D, 3)
     feats_flat = re_feats.view(B, -1, 3)  # (B, K*D, 3)
 
-    # 对点（行向量）做右乘 R^T，即 feats @ R^T
     if R.ndim == 2:
-        # 单一旋转矩阵
         feats_rot = torch.matmul(feats_flat, R.transpose(0, 1))
     else:
-        # batch 每帧各自的旋转
         feats_rot = torch.matmul(feats_flat, R.transpose(-1, -2))
 
-    # 恢复形状
     return feats_rot.view(B, K, D, 3)
 class LocalGlobalRegistration(nn.Module):
     def __init__(
@@ -513,7 +452,7 @@ class HypothesisProposer(nn.Module):
         batch_inlier_masks = torch.lt(batch_corr_residuals, self.acceptance_radius)  # (P, N)
         #ir = batch_inlier_masks.float().mean(dim=1)
         #best_index = ir.argmax()
-        inlier_counts = batch_inlier_masks.long().sum(dim=1)  # 或 batch_inlier_masks.sum(dim=1)
+        inlier_counts = batch_inlier_masks.long().sum(dim=1)
         best_index = inlier_counts.argmax()
         cur_corr_scores = corr_scores * batch_inlier_masks[best_index].float()
         #print("src_corr_points",cur_corr_scores)
@@ -641,26 +580,6 @@ class combineRegisraition(nn.Module):
             ref_points_f,
             src_points_f,
     ):
-        """
-        Combined registration forward pass.
-
-        Args:
-            ref_knn_points (Tensor): (B, K, 3)
-            src_knn_points (Tensor): (B, K, 3)
-            re_ref_knn_feats (Tensor): (B, K, D, 3) - rotation-equivariant features
-            re_src_knn_feats (Tensor): (B, K, D, 3) - rotation-equivariant features
-            ref_knn_masks (BoolTensor): (B, K)
-            src_knn_masks (BoolTensor): (B, K)
-            score_mat (Tensor): (B, K, K) or (B, K + 1, K + 1), log likelihood
-            global_scores (Tensor): (B,)
-            ref_feats(Tensor),(ref_nums_f,63) 旋转不变性特征
-            src_feats(Tensor),(src_nums_f,63)
-
-        Returns:
-            stage1_results: Dict containing LGR results
-            stage2_results: Dict containing HypothesisProposer results
-            final_transform: Final transformation matrix (4, 4)
-        """
 
     
 
@@ -729,56 +648,5 @@ class combineRegisraition(nn.Module):
 
         global_src_corr_points = src_points_f.unsqueeze(0)
         aligned_src_points = apply_transform(global_src_corr_points, final_transform)
-        '''
-        #筛选出初始内点 但是如果我一开始估计就错误怎么办呢？
-        #corr_residuals = torch.linalg.norm(global_ref_corr_points - aligned_src_points, dim=2) 这个不行，这个需要要求两个张量维度一样
-        src_corr_points, tgt_corr_points = extract_mutual_correspondences(
-            aligned_src_points, global_ref_corr_points, 4
-        )
-        #print("corr_residuals",src_corr_points.shape,tgt_corr_points.shape)
-
-        #src_corr_feats = rotate_equivariant_feats(src_corr_feats, final_transform)
-      
-        希望这里调用regor方法两次渐进的
-    
-        #sel_ind = np.random.choice(src_corr_points.shape[1], src_corr_points.shape[1])
-
-        #src_keypts_corr_final = src_corr_points[:, sel_ind, :]
-        #tgt_keypts_corr_final = tgt_corr_points[:, sel_ind, :]
-        #("src_keypts_corr_final",src_keypts_corr_final.shape)
-        #print("tgt_keypts_corr_final", tgt_keypts_corr_final.shape)
-   
-   
-        regenerator = Regenerator()
-
-
-
-     
-        src_keypts_corr_final, tgt_keypts_corr_final, pred_trans = regenerator.regenerate(
-            src_corr_points,
-            tgt_corr_points,
-            aligned_src_points,
-            global_ref_corr_points,
-            src_feats.unsqueeze(0),
-            ref_feats.unsqueeze(0),
-            knn_num=40,
-            sampling_num=src_corr_points.shape[1]
-        )
-        src_keypts_corr_final, tgt_keypts_corr_final, pred_trans_1 = regenerator.regenerate(
-            src_keypts_corr_final,
-            tgt_keypts_corr_final,
-            aligned_src_points,
-            global_ref_corr_points,
-            src_feats.unsqueeze(0),
-            ref_feats.unsqueeze(0),
-            knn_num=40,
-            sampling_num=src_corr_points.shape[1]
-        )
-        #print('trans',final_transform.shape,pred_trans.shape)
-        if pred_trans.dim() == 3 and pred_trans.shape[0] == 1:
-            pred_trans = pred_trans.squeeze(0)  # [1, 4, 4] -> [4, 4]
-    
-        #final_transform = torch.matmul(pred_trans, final_transform)
-             '''
 
         return hp_ref_corr_points, hp_src_corr_points, hp_corr_scores,  final_transform , hp_hypotheses, hp_ref_feats, hp_src_feats,

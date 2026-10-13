@@ -23,18 +23,12 @@ from protassem.fitting.chunked_registration import build_registration
 from protassem.fitting.parenet.backbone import PAREConvFPN
 from protassem.fitting.cloud_encoding import backbone_input, node_partition
 
-# 推理链路（demo_mask.process_single_pair）只消费最终位姿与两侧点数；
-# 训练/诊断路径传 output_fields=None，保持返回全部字段的旧行为。
 INFERENCE_OUTPUT_FIELDS = ("estimated_transform", "ref_points", "src_points")
 
 
 @dataclass
 class EncodedCloud:
-    """单侧编码结果（T06）：只含与本侧几何有关的张量，可独立缓存。
-
-    字段含义与 `forward()` 里的同名中间量一一对应（ref=target、src=source）：
-    `node_knn_points` 已含 padding 哨兵点；`node_masks`/`node_knn_*` 为节点分区。
-    """
+    'Cached per-cloud geometry and features.'
 
     points: torch.Tensor
     points_f: torch.Tensor
@@ -53,16 +47,11 @@ class EncodedCloud:
 
 
 def select_output_fields(output_dict, output_fields):
-    """按白名单裁剪 forward 的返回值；output_fields=None 表示全部保留。
-
-    白名单里出现 forward 未写入的字段时直接抛 KeyError：字段契约要显式失败，
-    不允许静默兜底（漏字段会让调用方拿到不完整的输出）。
-    """
     if output_fields is None:
         return output_dict
     missing = [name for name in output_fields if name not in output_dict]
     if missing:
-        raise KeyError("output_fields 在 forward 输出中不存在: %s" % missing)
+        raise KeyError('output_fields missing from forward output: %s' % missing)
     return {name: output_dict[name] for name in output_fields}
 
 
@@ -74,14 +63,14 @@ def SM(corr, src_keypts, tgt_keypts, inlier_threshold=0.1, top_ratio=0.85):
     ## polynomial funcition
     sigma = inlier_threshold / 3
     M = torch.max(torch.zeros_like(M), 4.5 - M ** 2 / 2 / sigma ** 2)
-    M[:, torch.arange(M.shape[1]), torch.arange(M.shape[1])] = 0  # 对角设置为0
+    M[:, torch.arange(M.shape[1]), torch.arange(M.shape[1])] = 0
 
     # calculate the principal eigenvector
     leading_eig = torch.ones_like(M[:, :, 0:1])
     for _ in range(10):
         leading_eig = torch.bmm(M, leading_eig)
         leading_eig = leading_eig / (torch.norm(leading_eig, dim=1,
-                                                keepdim=True) + 1e-6)  # 迭代 幂迭代法 我们从一个随便的向量（比如全 1 向量）开始，不断把它乘上 M，每次都做归一化。理论上，迭代多次以后它就会**“收敛”**到最大特征值对应的特征向量。
+                                                keepdim=True) + 1e-6)
     leading_eig = leading_eig.squeeze(-1)
     # pdb.set_trace()
     # select top-10% as the inliers
@@ -95,8 +84,6 @@ def SM(corr, src_keypts, tgt_keypts, inlier_threshold=0.1, top_ratio=0.85):
 class PARE_Net(nn.Module):
     def __init__(self, cfg, hypothesis_chunk=0):
         super(PARE_Net, self).__init__()
-        # T08：假设评分分块大小（0 = 原整批路径）。显式传参而非改 cfg ——
-        # `make_cfg()` 返回模块级单例，改它会污染同进程内的其他模型。
         self.hypothesis_chunk = int(hypothesis_chunk)
         self.num_points_in_patch = cfg.model.num_points_in_patch
         self.matching_radius = cfg.model.ground_truth_matching_radius
@@ -141,15 +128,12 @@ class PARE_Net(nn.Module):
 
 
         self.point_matching = PointDualMatching(dim=cfg.backbone.output_dim // 3 * 3)
-        #self.optimal_transport = LearnableLogOptimalTransport(cfg.model.num_sinkhorn_iterations)  # 迭代100次 寻找组中的最优匹配点
         self.corr_num = cfg.coarse_matching.num_correspondences
         #self.proj1 = nn.Linear(cfg.backbone.output_dim // 3 * 3, cfg.backbone.output_dim // 3 * 3, True)
 
         
-        # T08：hypothesis_chunk > 0 时用分块版替换 LGR/HP 的假设评分（0 = 原路径）
         self.combienrefistration=build_registration(
         hypothesis_chunk=self.hypothesis_chunk,
-        # LocalGlobalRegistration 参数 (第一阶段)
         lgr_k=cfg.fine_matching_geo.topk,
         lgr_acceptance_radius=cfg.fine_matching_geo.acceptance_radius,
         lgr_mutual=cfg.fine_matching_geo.mutual,
@@ -160,7 +144,6 @@ class PARE_Net(nn.Module):
         lgr_correspondence_limit=cfg.fine_matching_geo.correspondence_limit,
         lgr_num_refinement_steps=cfg.fine_matching_geo.num_refinement_steps,
 
-        # HypothesisProposer 参数 (第二阶段)
         hp_k=cfg.fine_matching.topk,
         hp_acceptance_radius=cfg.fine_matching.acceptance_radius,
         hp_confidence_threshold=cfg.fine_matching.confidence_threshold,
@@ -170,9 +153,6 @@ class PARE_Net(nn.Module):
 
 
     def forward(self, data_dict, output_fields=None):
-        """output_fields: 需要回传的字段名（None = 全部）。只影响返回内容，
-        不改变任何计算；传入 INFERENCE_OUTPUT_FIELDS 时中间张量在返回后即可释放。
-        """
         output_dict = {}
         # Downsample point clouds
         #print("data_dict keys:", data_dict.keys())
@@ -189,7 +169,7 @@ class PARE_Net(nn.Module):
         ref_length_f = data_dict['lengths'][1][0].item()
         ref_length = data_dict['lengths'][0][0].item()
         points_c = data_dict['points'][-1][:, :3].detach()
-        points_f = data_dict['points'][1][:, :3].detach()#一次采样以后的
+        points_f = data_dict['points'][1][:, :3].detach()
         points = data_dict['points'][0][:, :3].detach()
         #print("points",points.shape,points_f.shape,points_c.shape)
         #print("data_dict['points'][0]",data_dict['points'][0].shape)
@@ -237,7 +217,6 @@ class PARE_Net(nn.Module):
         #print("ref_norm", norm_ref[2])
         #print("src_node_knn_indices_shot",src_node_knn_indices_shot.shape)
 
-        #超点 来匹配原始点 带有密度向量的点
 
         output_dict['ref_node_knn_indices'] = ref_node_knn_indices
         output_dict['src_node_knn_indices'] = src_node_knn_indices
@@ -247,9 +226,6 @@ class PARE_Net(nn.Module):
         ref_node_knn_points = index_select(ref_padded_points_f, ref_node_knn_indices, dim=0) #[ref_N_c, 64, 3]
         src_node_knn_points = index_select(src_padded_points_f, src_node_knn_indices, dim=0)
 
-        # 1.2 审计结论（T03）：GT 对应只被下面的 `if self.training:` 分支（coarse_target）消费，
-        # 推理时是纯浪费——它会构造 (M,N) 距离矩阵与 (B,K,K) 重叠矩阵。
-        # get_node_correspondences 无随机、无副作用、不写任何全局状态，跳过不改变其余计算。
         if self.training:
             gt_node_corr_indices, gt_node_corr_overlaps = get_node_correspondences(
                 ref_points_c,
@@ -285,7 +261,6 @@ class PARE_Net(nn.Module):
 
         #all_points = torch.cat([ref_points_c, src_points_c], dim=0)
         #center = all_points.mean(dim=0, keepdim=True)
-        #scale = all_points.std(dim=0, keepdim=True) + 1e-6  # 防止除0
 
         #ref_pc = (ref_points_c - center) / scale
         #src_pc = (src_points_c - center) / scale
@@ -295,19 +270,14 @@ class PARE_Net(nn.Module):
         ref_pc = ref_points_c / scale
         src_pc = src_points_c / scale
 
-        # Step 1: 计算质心
         #ref_center = ref_points_c.mean(dim=0, keepdim=True)  # (1, 3)
         #src_center = src_points_c.mean(dim=0, keepdim=True)  # (1, 3)
 
-        # Step 2: 中心化点云
         #ref_points_centered = ref_points_c - ref_center  # (N, 3)
         #src_points_centered = src_points_c - ref_center  # (M, 3)
 
-        # Step 3: 计算各自的归一化尺度（可选方案见下）
-        #ref_scale = ref_points_centered.norm(dim=1).max()  # 用最大模长归一化
         #src_scale = src_points_centered.norm(dim=1).max()
 
-        # Step 4: 归一化
         #ref_pc = ref_points_centered /scale
         #src_pc = src_points_centered /scale
 
@@ -451,7 +421,6 @@ class PARE_Net(nn.Module):
         #mask = ref_node_corr_knn_points[3] > 0
         #count = mask.sum().item()
 
-        #print("第 5 个点对应的 ref_node_corr_knn_points 中 > 0 的数量:", count)
         re_ref_padded_feats_f = torch.cat([re_ref_feats_f, torch.zeros_like(re_ref_feats_f[:1])], dim=0)
         re_src_padded_feats_f = torch.cat([re_src_feats_f, torch.zeros_like(re_src_feats_f[:1])], dim=0)
         re_ref_node_corr_knn_feats = index_select(re_ref_padded_feats_f, ref_node_corr_knn_indices, dim=0)  # (P, K, C)
@@ -469,12 +438,10 @@ class PARE_Net(nn.Module):
         #matching_scores = matching_scores / feats_f.shape[1] ** 0.5
         #matching_scores = matching_scores * ref_node_corr_knn_scores[:, :, None] * src_node_corr_knn_scores[:, None, :]
         #matching_scores = self.optimal_transport(matching_scores, ref_node_corr_knn_masks, src_node_corr_knn_masks)
-        #matching_scores = matching_scores[:, :-1, :-1]#取掉最后一列
         #
         #print("matching_scores",matching_scores.shape)#matching_scores torch.Size([256, 129, 129])
         #print("matching_scores",matching_scores.shape)
         #num_positive = (matching_scores > 0).sum()
-        #print("大于 0 的元素数量：", num_positive.item())
         output_dict['matching_scores'] = matching_scores   # 256 64 64
         output_dict['ref_node_corr_knn_scores'] = ref_node_corr_knn_scores
         output_dict['src_node_corr_knn_scores'] = src_node_corr_knn_scores
@@ -482,31 +449,6 @@ class PARE_Net(nn.Module):
         # 8 Generate hypotheses and select the best one
         #ref_node_corr_knn_points = ref_node_corr_knn_points * scale
         #src_node_corr_knn_points = src_node_corr_knn_points * scale
-        '''
-        with torch.no_grad():
-            ref_corr_points, src_corr_points, corr_scores, estimated_transform, hypotheses, re_ref_corr_feats, re_src_corr_feats, = self.fine_matching(
-                ref_node_corr_knn_points,
-                src_node_corr_knn_points,
-                re_ref_node_corr_knn_feats,
-                re_src_node_corr_knn_feats,
-                ref_node_corr_knn_masks,
-                src_node_corr_knn_masks,
-                matching_scores,
-                #data_dict['ref_vectors'],  # 添加ref_vectors参数
-                #data_dict['src_vectors']  # 添加src_vectors参数
-            )
-
-      
-        with torch.no_grad():
-            ref_corr_points, src_corr_points, corr_scores, estimated_transform = self.fine_matching_geo(
-                ref_node_corr_knn_points,
-                src_node_corr_knn_points,
-                ref_node_corr_knn_masks,
-                src_node_corr_knn_masks,
-                matching_scores,
-                node_corr_scores,
-            )
-       '''
 
      
         with torch.no_grad():
@@ -537,20 +479,9 @@ class PARE_Net(nn.Module):
         return select_output_fields(output_dict, output_fields)
 
     # ==================================================================
-    # T06：单侧编码 / 双侧配准拆分
     # ==================================================================
-    # 上面 forward() 是**兼容对照实现**（联合布局、原样保留，训练入口仍走它）；
-    # 下面两个方法把同一条推理链路拆成"与本侧几何有关"和"依赖两侧交互"两段。
-    # 两者的数值等价性由 tools/check_encoding_split.py 逐层校验（仅开发服务器保留；统一验收容差
-    # 特征 atol=1e-6 / rtol=1e-5；位姿与候选身份要求一致）。
 
     def encode_cloud(self, geometry, scale):
-        """单侧编码：backbone + 节点分区，只依赖本侧几何与共享 scale。
-
-        geometry: CloudGeometry（T04/T05，本侧局部索引）
-        scale   : 两侧共享的归一化尺度（联合布局时的同一个标量）
-        返回 EncodedCloud（可独立缓存；不含任何跨侧交互量）。
-        """
         device = next(self.parameters()).device
 
         re_feats_f, feats_f, re_feats_c, feats_c, m_scores = self.backbone(
@@ -562,7 +493,6 @@ class PARE_Net(nn.Module):
         points = geometry.points[0][:, :3].detach()
         points_f = geometry.points[1][:, :3].detach()
         points_c = geometry.points[-1][:, :3].detach()
-        # 细节点邻域点（含 padding 哨兵点，与 forward 里的 ref_padded_points_f 一致）
         padded_points_f = torch.cat([points_f, torch.zeros_like(points_f[:1])], dim=0)
         node_knn_points = index_select(padded_points_f, partition.knn_indices, dim=0)
 
@@ -576,20 +506,14 @@ class PARE_Net(nn.Module):
             geometry_key=geometry.fingerprint())
 
     def register_pair(self, target_encoded, source_encoded, output_fields=None):
-        """双侧配准：cross-attention → 粗匹配 → 点匹配 → LGR 假设与选优。
-
-        target_encoded / source_encoded: 两侧的 EncodedCloud（scale 必须一致）。
-        返回字段与 forward() 同名（不含输入 transform：推理不使用参考位姿）。
-        只支持推理（`self.training == False`）；训练入口请用 forward()。
-        """
         if self.training:
-            raise RuntimeError("register_pair 只用于推理；训练请用 forward()")
+            raise RuntimeError('register_pair is inference-only; use forward() for training')
         output_dict = {}
         ref = target_encoded
         src = source_encoded
         scale = ref.scale
         if not torch.equal(scale, src.scale):
-            raise ValueError("两侧编码的 scale 不一致：%s vs %s" % (scale, src.scale))
+            raise ValueError('Encoded cloud scales differ: %s vs %s' % (scale, src.scale))
 
         ref_points_c, src_points_c = ref.points_c, src.points_c
         ref_points_f, src_points_f = ref.points_f, src.points_f
@@ -735,11 +659,6 @@ def create_model(config, hypothesis_chunk=0):
 
 
 def model_fingerprint(model):
-    """权重与结构的指纹（T07 编码缓存 key 的一部分）。
-
-    覆盖 state_dict 的键名/形状/dtype 与全部权重字节：权重一变（重新训练、换了 checkpoint）
-    缓存即失效。只看一次调用（模型加载后计算一次即可），约 0.1–0.2 s。
-    """
     digest = hashlib.sha256()
     state = model.state_dict()
     for name in sorted(state):

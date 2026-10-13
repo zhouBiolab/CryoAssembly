@@ -10,15 +10,6 @@ from pareconv.modules.registration import WeightedProcrustes, solve_local_rotati
 
 
 def get_rotation_from_transform(transform: torch.Tensor) -> torch.Tensor:
-    """
-    从刚性变换矩阵中提取旋转部分。
-
-    Args:
-        transform: (4,4) 或 (B,4,4) 的刚性变换矩阵
-
-    Returns:
-        rotation: (3,3) 或 (B,3,3) 的旋转矩阵
-    """
     if transform.ndim == 2:
         return transform[:3, :3]
     elif transform.ndim == 3:
@@ -30,32 +21,16 @@ def rotate_equivariant_feats(
     re_feats: torch.Tensor,
     lgr_transform: torch.Tensor
 ) -> torch.Tensor:
-    """
-    只把 LGR 的旋转作用到等变特征上（去掉平移）。
-
-    Args:
-        re_feats: (B, K, D, 3)，等变特征的 xyz 分量在最后一维
-        lgr_transform: (B, 4, 4) 或 (4, 4)，LGR 输出的刚性变换
-
-    Returns:
-        re_feats_rot: (B, K, D, 3)，旋转后的等变特征
-    """
-    # 提取旋转
     R = get_rotation_from_transform(lgr_transform)  # (3,3) or (B,3,3)
 
     B, K, D, _ = re_feats.shape
-    # 拉平成 (B, K*D, 3)
     feats_flat = re_feats.view(B, -1, 3)  # (B, K*D, 3)
 
-    # 对点（行向量）做右乘 R^T，即 feats @ R^T
     if R.ndim == 2:
-        # 单一旋转矩阵
         feats_rot = torch.matmul(feats_flat, R.transpose(0, 1))
     else:
-        # batch 每帧各自的旋转
         feats_rot = torch.matmul(feats_flat, R.transpose(-1, -2))
 
-    # 恢复形状
     return feats_rot.view(B, K, D, 3)
 class LocalGlobalRegistration(nn.Module):
     def __init__(
@@ -394,7 +369,7 @@ class HypothesisProposer(nn.Module):
         batch_inlier_masks = torch.lt(batch_corr_residuals, self.acceptance_radius)  # (P, N)
         #ir = batch_inlier_masks.float().mean(dim=1)
         #best_index = ir.argmax()
-        inlier_counts = batch_inlier_masks.long().sum(dim=1)  # 或 batch_inlier_masks.sum(dim=1)
+        inlier_counts = batch_inlier_masks.long().sum(dim=1)
         best_index = inlier_counts.argmax()
         cur_corr_scores = corr_scores * batch_inlier_masks[best_index].float()
 

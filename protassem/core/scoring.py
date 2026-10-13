@@ -1,21 +1,4 @@
-"""CC_mask calculation — direct computation, no subprocess.
-
-老卡收口 P4：把「密度侧输入」与「结构坐标」抽成可复用的上下文，并加**有界**缓存。
-
-- `DensityMapContext` 保存**原 dtype** 的密度数组（只做一次阈值化：`>contour ? x : -1.0`）
-  以及 origin / voxel_size / shape / contour / 指纹；**不改变评分路径的 dtype 与阈值顺序**
-  （不在这里做类型转换优化）。
-- `score_coords(context, coords, elements, resolution)` 是坐标数组入口；
-  `calculate_cc_mask(...)` 保留原签名，退化为薄包装（读上下文 + 读结构 + 评分）。
-- 缓存：`score_cache_mb` 默认 **1024 MiB / 进程**（装得下一张 400^3 float32 图），
-  密度上下文与结构坐标**共享**该预算；0 = 关闭。缓存是**进程本地**的
-  （worker 进程各自持有），多 worker 下总量按进程数放大。
-- 失效：`(abspath, size, mtime_ns, contour, SCORING_VERSION)`；会被同名覆盖的动态密度必须
-  显式给出 `density_version` 或调用 `invalidate_density()` —— mtime 不是版本契约。
-- 只读约定：缓存里的数组只读，需要修改时用 `.copy()`。
-- 配置变化（预算）会**清空并重建**缓存；`apply_score_cache()` 也写环境变量，
-  这样 fork 出来的 worker 与 spawn 出来的 worker 都能拿到同一个预算。
-"""
+'Density-based structure scoring.'
 
 import os
 
@@ -115,27 +98,10 @@ def _make_sim_map(origin, voxel_size, box_size, coords, elements, resolution):
 
 def _make_phenix_mask(origin, voxel_size, box_size, coords, elements,
                       solvent_radius=1.1, mask_radius=2.0, resolution=None):
-    """原子球体掩码：球体 splat -> EDT 膨胀 -> 高斯软化 -> 0.5 阈值。
-
-    只在**原子包围盒 ⊕ padding** 的子体积上做 EDT 与高斯卷积，再贴回全图：
-    这两个全图操作占本函数耗时的 99%，而原子包围盒通常只占全图很小一部分
-    （实测 400³ 图上某拟合位姿为 0.5% 体积）。padding 取
-    ``mask_radius + 5σ + 2 voxel``（σ = resolution/4）：EDT 只需覆盖 mask_radius
-    的膨胀范围，高斯核半宽为 4σ，5σ + 2 留余量。
-
-    子体积之外 ``expanded`` 恒为 0（膨胀范围已被 padding 覆盖），与
-    ``mode="constant", cval=0.0`` 的假设一致，故与全图实现逐点相同 ——
-    等价性由 tests/test_phenix_mask_crop.py 用独立的全图参考实现锁定。
-
-    没有任何原子落在网格内时返回全 False，``score_coords`` 据此返回 CC 0.0。
-    （旧实现在该情形下会把 ``distance_transform_edt`` 对"无背景输入"的未定义
-    输出当成地图用，在网格中部选出一片无意义区域。）
-    """
     nz, ny, nx = box_size
     vs = [float(voxel_size[i]) for i in range(3)]
     grid = [nx, ny, nz]
 
-    # 第一遍：每个原子球体的网格包围盒（公式与夹取规则同旧实现）
     boxes = []
     for coord, elem in zip(coords, elements):
         radius = VDW_RADII.get(elem, 1.70) + solvent_radius
@@ -158,7 +124,6 @@ def _make_phenix_mask(origin, voxel_size, box_size, coords, elements,
     hi = np.minimum([max(b[2][i][1] for b in boxes) for i in range(3)] + pad,
                     grid)
 
-    # 第二遍：把球体 splat 进子体积（网格坐标整体平移 lo）
     sub = np.zeros((hi[2] - lo[2], hi[1] - lo[1], hi[0] - lo[0]), dtype=np.bool_)
     for c, radius_sq, idx in boxes:
         (i0, i1), (j0, j1), (k0, k1) = idx
@@ -180,7 +145,6 @@ def _make_phenix_mask(origin, voxel_size, box_size, coords, elements,
 
 
 class DensityMapContext:
-    """一次评分所需的密度侧输入（阈值化只做一次；**不改变原 dtype**）。"""
 
     __slots__ = ("path", "data", "voxel_size", "origin", "shape", "contour",
                  "fingerprint")
@@ -196,7 +160,6 @@ class DensityMapContext:
 
 
 def _entry_bytes(value):
-    """共享 LRU 的计费函数：密度上下文与结构坐标都走这里。"""
     if isinstance(value, DensityMapContext):
         return (object_bytes(value.data) + object_bytes(value.voxel_size)
                 + object_bytes(value.origin) + 512)
@@ -205,12 +168,6 @@ def _entry_bytes(value):
 
 
 class _ScoreCache:
-    """进程本地缓存：密度上下文与结构坐标**共享同一个字节预算**。
-
-    一个 LRU、两类键前缀（`d:` / `s:`）—— 两条独立 LRU 各自按上限计费的话，
-    实际占用会到 2×预算（第 7 步实测到 113 MB + 44 MB > 128 MiB 才暴露）。
-    命中/未命中按类别计数，占用与峰值按共享预算计。
-    """
 
     KIND_PREFIX = {"density": "d:", "structure": "s:"}
 
@@ -240,7 +197,6 @@ class _ScoreCache:
         return stored
 
     def clear(self):
-        """清空条目并重置统计（"配置变化即重设"的口径：统计跟着配置走）。"""
         self.cache.clear()
         for counter in self.counters.values():
             for key in counter:
@@ -276,7 +232,6 @@ _CACHE = _ScoreCache(_env_capacity_mb())
 
 
 def configure_score_cache(capacity_mb):
-    """设置本进程的评分缓存预算（MiB，0 = 关闭）；预算变化时重建，否则清空。"""
     global _CACHE
     capacity_mb = max(0, int(capacity_mb))
     if capacity_mb != _CACHE.capacity_mb:
@@ -287,7 +242,6 @@ def configure_score_cache(capacity_mb):
 
 
 def apply_score_cache(capacity_mb):
-    """父进程应用预算：写环境变量（worker 继承）+ 直接配置本进程。"""
     os.environ[SCORE_CACHE_ENV] = str(int(max(0, int(capacity_mb))))
     return configure_score_cache(capacity_mb)
 
@@ -297,22 +251,12 @@ def score_cache_snapshot():
 
 
 def invalidate_density():
-    """显式失效（返回清掉的条目数）。
-
-    同名覆盖的动态密度有两种正确做法：给 `density_version`（精确、按 key 失效），
-    或在这里整体失效。这里不做"按路径删除"—— 半吊子的部分失效比整体失效更危险。
-    """
     entries = _CACHE.snapshot()["entries"]
     _CACHE.clear()
     return entries
 
 
 def density_fingerprint(density_mrc, contour, density_version=None):
-    """内容指纹：版本 + 路径 + size + mtime_ns + contour。
-
-    `density_version` 由调用方给出（例如掩码/写入轮次）：**同名覆盖的动态密度必须给**，
-    否则只能依赖 mtime —— 那不是版本契约。
-    """
     stat = os.stat(str(density_mrc))
     return "|".join([str(SCORING_VERSION), os.path.abspath(str(density_mrc)),
                      str(stat.st_size), str(stat.st_mtime_ns),
@@ -321,7 +265,6 @@ def density_fingerprint(density_mrc, contour, density_version=None):
 
 
 def load_density_context(density_mrc, contour, density_version=None):
-    """读取 + 阈值化（无缓存路径；缓存走 `density_context`）。"""
     data, voxel_size, origin, _dims = read_mrc_full(density_mrc)
     data = np.where(data > contour, data, -1.0)
     return DensityMapContext(
@@ -331,7 +274,6 @@ def load_density_context(density_mrc, contour, density_version=None):
 
 
 def density_context(density_mrc, contour, density_version=None):
-    """取（可能命中缓存的）密度上下文；返回的数组视为**只读**。"""
     key = density_fingerprint(density_mrc, contour, density_version)
     cached = _CACHE.get("density", key)
     if cached is not None:
@@ -342,7 +284,6 @@ def density_context(density_mrc, contour, density_version=None):
 
 
 def structure_coords(structure_file):
-    """结构坐标（缓存 key 含 size + mtime_ns + 版本）。"""
     path = os.path.abspath(str(structure_file))
     try:
         stat = os.stat(path)
@@ -361,7 +302,6 @@ def structure_coords(structure_file):
 
 
 def score_coords(context, coords, elements, resolution):
-    """按坐标数组评分（原 `calculate_cc_mask` 的计算部分，逐行等价）。"""
     exp_map = context.data
     dims = context.shape
     origin, voxel_size = context.origin, context.voxel_size
@@ -381,7 +321,7 @@ def score_coords(context, coords, elements, resolution):
 
 def calculate_cc_mask(density_mrc, structure_file, resolution, contour,
                       density_version=None):
-    """Compute CC_mask between experimental map and structure（薄包装）。"""
+    'Compute masked structure-to-map correlation.'
     context = density_context(density_mrc, contour, density_version)
     coords, elements = structure_coords(structure_file)
     return score_coords(context, coords, elements, resolution)

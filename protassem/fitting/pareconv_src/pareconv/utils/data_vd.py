@@ -48,22 +48,9 @@ voxel_size_list = [2, 3.6, 6.48, 11.664]
 #voxel_size_list = [1, 3.6, 6.48, 11.664]
 def farthest_point_sampling(points: torch.Tensor, lengths: torch.Tensor, target_ratio: float = 0.5) -> Tuple[
     torch.Tensor, torch.Tensor]:
-    """
-    最远点采样算法 - 根据原始点数比例进行采样
-
-    Args:
-        points: (N, D) 所有点的坐标，D通常是3或更多维度
-        lengths: (B,) 每个批次中点的数量
-        target_ratio: 采样比例，默认为0.5（减半）
-
-    Returns:
-        sampled_points: 采样后的点
-        sampled_lengths: 采样后每个批次的点数
-    """
     device = points.device
     batch_size = lengths.shape[0]
 
-    # 只使用xyz坐标计算距离
     xyz_points = points[:, :3]
 
     sampled_indices_list = []
@@ -75,21 +62,17 @@ def farthest_point_sampling(points: torch.Tensor, lengths: torch.Tensor, target_
         batch_points = xyz_points[start_idx:end_idx]
         batch_size_points = batch_points.shape[0]
 
-        # 根据原始点数计算该batch需要采样的点数
         batch_num_samples = max(1, int(batch_size_points * target_ratio))
 
         if batch_num_samples >= batch_size_points:
-            # 如果需要采样的点数大于等于原始点数，直接返回所有点
             sampled_indices = torch.arange(start_idx, end_idx, device=device)
         else:
-            # FPS采样
             sampled_indices = fps_single_batch(batch_points, batch_num_samples, start_idx)
 
         sampled_indices_list.append(sampled_indices)
         sampled_lengths.append(sampled_indices.shape[0])
         start_idx = end_idx
 
-    # 合并所有采样的索引
     all_sampled_indices = torch.cat(sampled_indices_list, dim=0)
     sampled_points = points[all_sampled_indices]
     sampled_lengths = torch.tensor(sampled_lengths, dtype=torch.long, device=device)
@@ -97,18 +80,6 @@ def farthest_point_sampling(points: torch.Tensor, lengths: torch.Tensor, target_
     return sampled_points, sampled_lengths
 def farthest_point_sampling_gpu(points: torch.Tensor, lengths: torch.Tensor, target_ratio: float = 0.25) -> Tuple[
     torch.Tensor, torch.Tensor]:
-    """
-    最远点采样算法 - 使用PyTorch3D的GPU加速版本
-
-    Args:
-        points: (N, D) 所有点的坐标，D通常是3或更多维度
-        lengths: (B,) 每个批次中点的数量
-        target_ratio: 采样比例，默认为0.5（减半）
-
-    Returns:
-        sampled_points: 采样后的点
-        sampled_lengths: 采样后每个批次的点数
-    """
     device = points.device
     batch_size = lengths.shape[0]
 
@@ -121,27 +92,21 @@ def farthest_point_sampling_gpu(points: torch.Tensor, lengths: torch.Tensor, tar
         batch_points = points[start_idx:end_idx]
         batch_size_points = batch_points.shape[0]
 
-        # 根据原始点数计算该batch需要采样的点数
         batch_num_samples = max(1, int(batch_size_points * target_ratio))
 
         if batch_num_samples >= batch_size_points:
-            # 如果需要采样的点数大于等于原始点数，直接返回所有点
             sampled_points_list.append(batch_points)
             sampled_lengths.append(batch_size_points)
         else:
-            # 使用PyTorch3D的GPU加速FPS
-            # 需要将点云reshape为 (1, N, 3) 格式
-            batch_points_3d = batch_points[:, :3].unsqueeze(0)  # 只使用xyz坐标
+            batch_points_3d = batch_points[:, :3].unsqueeze(0)
 
-            # PyTorch3D的FPS返回采样后的点和索引
             sampled_pts, sampled_idx = sample_farthest_points(
                 batch_points_3d,
                 K=batch_num_samples,
                 random_start_point=True
             )
 
-            # 获取完整的特征（不仅仅是xyz）
-            sampled_idx = sampled_idx[0]  # 去掉batch维度
+            sampled_idx = sampled_idx[0]
             sampled_full_features = batch_points[sampled_idx]
 
             sampled_points_list.append(sampled_full_features)
@@ -149,7 +114,6 @@ def farthest_point_sampling_gpu(points: torch.Tensor, lengths: torch.Tensor, tar
 
         start_idx = end_idx
 
-    # 合并所有采样的点
     sampled_points = torch.cat(sampled_points_list, dim=0)
     sampled_lengths = torch.tensor(sampled_lengths, dtype=torch.long, device=device)
 
@@ -157,105 +121,26 @@ def farthest_point_sampling_gpu(points: torch.Tensor, lengths: torch.Tensor, tar
 
 
 def fps_single_batch(points: torch.Tensor, num_samples: int, offset: int) -> torch.Tensor:
-    """
-    对单个batch进行FPS采样
-
-    Args:
-        points: (N, 3) 点云坐标
-        num_samples: 采样点数
-        offset: 全局索引偏移量
-
-    Returns:
-        sampled_indices: 采样点的全局索引
-    """
     device = points.device
     N = points.shape[0]
 
-    # 初始化距离矩阵，所有点到采样集的最小距离
     distances = torch.full((N,), float('inf'), device=device)
 
-    # 随机选择第一个点
     farthest_idx = torch.randint(0, N, (1,), device=device).item()
     sampled_indices = [farthest_idx]
 
     for _ in range(num_samples - 1):
-        # 计算当前最远点到所有点的距离
         current_point = points[farthest_idx:farthest_idx + 1]
         dist_to_current = torch.sum((points - current_point) ** 2, dim=1)
 
-        # 更新每个点到采样集的最小距离
         distances = torch.minimum(distances, dist_to_current)
 
-        # 选择距离采样集最远的点
         farthest_idx = torch.argmax(distances).item()
         sampled_indices.append(farthest_idx)
 
-    # 转换为全局索引
     sampled_indices = torch.tensor(sampled_indices, dtype=torch.long, device=device) + offset
 
     return sampled_indices
-'''
-
-def precompute_subsample(points, lengths, num_stages, voxel_size_list, num_neighbors, subsample_ratio):
-    """
-    使用FPS进行下采样
-
-    第一次采样保持数量不变，之后每次按比例减半
-    每个点云（ref/src）独立按照其原始点数的比例进行采样
-    """
-    assert num_stages == len(num_neighbors)
-
-    points_list = []
-    lengths_list = []
-
-    current_points = points
-    current_lengths = lengths
-
-    for i in range(num_stages):
-        if i == 0 :
-            # 前两层不下采样
-            points_list.append(current_points)
-            lengths_list.append(current_lengths)
-
-        elif i == 1:
-            # 判断当前 batch 中所有点的总和
-            total_points = current_lengths.sum().item()  # tensor -> scalar
-            #print("toltal",total_points)
-            ratio = 1 #if total_points > 50000 else 0.5 0.45
-
-            current_points, current_lengths = farthest_point_sampling_gpu(
-                current_points, current_lengths, target_ratio=ratio
-            )
-            points_list.append(current_points)
-            lengths_list.append(current_lengths)
-
-
-        else:
-            # 判断当前 batch 中所有点的总和
-            total_points = current_lengths.sum().item()  # tensor -> scalar
-            #print("toltal",total_points)
-
-      
-            #if total_points > 23000:
-                 #ratio = 0.10
-            #elif total_points < 23000 and total_points>18000 :
-                 #ratio = 0.10
-            #else:
-                 #ratio = 0.10
-    
-
-
-            current_points, current_lengths = farthest_point_sampling_gpu(
-                current_points, current_lengths, target_ratio=0.15
-            )
-            points_list.append(current_points)
-            lengths_list.append(current_lengths)
-
-    return {
-        'points': points_list,
-        'lengths': lengths_list,
-    }
-'''
 
 
 def precompute_subsample(points, lengths, num_stages, voxel_size_list, num_neighbors, subsample_ratio):
@@ -378,7 +263,6 @@ def registration_collate_fn_stack_mode(
     if precompute_data:
         with torch.no_grad():
             input_dict = precompute_subsample(points, lengths, num_stages, voxel_size_list, num_neighbors, subsample_ratio)
-            #del input_dict['points'][0]  # 如果前几层不再需要
             torch.cuda.empty_cache()
 
             collated_dict.update(input_dict)

@@ -154,17 +154,16 @@ class EpochBasedTrainer(BaseTrainer):
                                               self.cfg.backbone.num_neighbors,
                                               )
             data_dict.update(data)
-            ######4.22——xxy-混合点以及密度聚类-旋转不变性描述符
 
-            ref_length_d = data_dict['lengths'][-2][0].item()#倒数第二层 作为输入进行聚类算法 看点数选择不同层数
-            ref_length_c = data_dict['lengths'][-1][0].item()#超点 体素采样
+            ref_length_d = data_dict['lengths'][-2][0].item()
+            ref_length_c = data_dict['lengths'][-1][0].item()
             points_c_iput = data_dict['points'][-2]
 
             ref_points_d = points_c_iput[:ref_length_d].cpu().numpy()
             src_points_d = points_c_iput[ref_length_d:].cpu().numpy()
 
             ref_points_co = data_dict['points'][-1][:ref_length_c]#.cpu().numpy()
-            src_points_co = data_dict['points'][-1][ref_length_c:]#.cpu().numpy() 体素采样的超点
+            src_points_co = data_dict['points'][-1][ref_length_c:]
 
 
 
@@ -183,23 +182,21 @@ class EpochBasedTrainer(BaseTrainer):
             dist_matrix = torch.sqrt(pairwise_distance(ref_points_co,keypoint_ref))
             dist_c = torch.topk(dist_matrix, k=1, dim=-1, largest=False)[0]
             ref_mask_s = (dist_c > sigmma).view(-1)#3*voxel_size
-            del dist_matrix, dist_c  # 显式删除不再需要的张量
+            del dist_matrix, dist_c
 
 
             dist_matrix = torch.sqrt(pairwise_distance(src_points_co,keypoint_src))
             dist_c = torch.topk(dist_matrix, k=1, dim=-1, largest=False)[0]
             src_mask_s= (dist_c > sigmma).view(-1)#3*voxel_size
-            del dist_matrix, dist_c  # 显式删除不再需要的张量
+            del dist_matrix, dist_c
 
-            ref_points_h = torch.cat((keypoint_ref, ref_points_co[ref_mask_s]), dim=0)#混合点ref
-            src_points_h = torch.cat((keypoint_src, src_points_co[src_mask_s]), dim=0)#混合点src
+            ref_points_h = torch.cat((keypoint_ref, ref_points_co[ref_mask_s]), dim=0)
+            src_points_h = torch.cat((keypoint_src, src_points_co[src_mask_s]), dim=0)
             del ref_points_co, src_points_co, ref_mask_s, src_mask_s
 
             points_h = torch.cat((ref_points_h,src_points_h),dim = 0)
             old_points = data_dict['points'][-1]
 
-            # 2. 覆盖写入新的混合点张量
-            #    （确保 device/dtype 和原来一致）
             device = old_points.device
             dtype = old_points.dtype
             points_h = points_h.to(device=device, dtype=dtype)

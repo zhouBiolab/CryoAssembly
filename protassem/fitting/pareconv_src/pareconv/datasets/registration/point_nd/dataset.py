@@ -18,44 +18,20 @@ from pareconv.utils.pointcloud import (
     uniform_2_sphere
 )
 from pareconv.utils.registration import get_correspondences, compute_overlap, compute_overlap_mask
-'''
-
-def extract_point_cloud_data(structured_array):
-    """
-    从结构化数组中提取点坐标、密度向量、密度值和原始索引
-    """
-    points = structured_array['point']
-    vectors = structured_array['vector']
-    density = structured_array['density']
-    indices = structured_array['index']
-    return points, vectors, density, indices
-'''
 
 def extract_point_cloud_data(structured_array, point_limit=2800):
-    """
-    从结构化数组中提取点坐标、密度向量、密度值和原始索引。
-    如果设置了 point_limit，则会随机下采样点云到该数量。
-
-    Args:
-        structured_array: 包含字段 'point', 'vector', 'density', 'index' 的结构化数组
-        point_limit (int or None): 最大点数限制。若为 None，不进行采样。
-
-    Returns:
-        points, vectors, density, indices (已采样)
-    """
     points = structured_array['point']
     vectors = structured_array['vector']
     density = structured_array['density']
     indices = structured_array['index']
 
-    # 采样逻辑
     num_points = points.shape[0]
     if point_limit is not None and num_points > point_limit:
         sampled_indices = np.random.permutation(num_points)[:point_limit]
         points = points[sampled_indices]
         vectors = vectors[sampled_indices]
         density = density[sampled_indices]
-        indices = indices[sampled_indices]  # 保留原始索引
+        indices = indices[sampled_indices]
 
     return points, vectors, density, indices
 class point_nd_Dataset(torch.utils.data.Dataset):
@@ -199,7 +175,6 @@ class point_nd_Dataset(torch.utils.data.Dataset):
         npz_file = self.metadata_list[index]
         metadata = np.load(npz_file)
 
-        # 加载源点云和目标点云结构化数组
         source_structured = metadata['source_structured']
         target_structured = metadata['target_structured']
         #get point cloud
@@ -254,31 +229,23 @@ class point_nd_Dataset(torch.utils.data.Dataset):
 
 
         if random.random() < 0.5:
-            # 模式 A：将源点云质心移到目标点云质心位置
-            ref_centroid = np.mean(ref_points, axis=0)  # 目标点云质心
-            src_centroid = np.mean(src_points, axis=0)  # 源点云质心
-            # 平移源点云，使其质心与目标一致
-            src_points = src_points - src_centroid + ref_centroid
-            # 更新平移向量：公式推导：新 t_new = t + R * src_centroid - R * ref_centroid
-            translation = translation + rotation @ src_centroid - rotation @ ref_centroid
-        else:
-            # 模式 B：将目标点云质心移到源点云质心位置
             ref_centroid = np.mean(ref_points, axis=0)
             src_centroid = np.mean(src_points, axis=0)
-            # 平移目标点云，使其质心与源点云一致
+            src_points = src_points - src_centroid + ref_centroid
+            translation = translation + rotation @ src_centroid - rotation @ ref_centroid
+        else:
+            ref_centroid = np.mean(ref_points, axis=0)
+            src_centroid = np.mean(src_points, axis=0)
             ref_points = ref_points - ref_centroid + src_centroid
-            # 更新平移向量：此时直接加上两个质心的差：新 t_new = t - ref_centroid + src_centroid
             translation = translation - ref_centroid + src_centroid
         transform = get_transform_from_rotation_translation(rotation, translation)
         overlap = compute_overlap(ref_points, src_points, transform, positive_radius=2.5)
         #print("overlap",overlap)
-        # 更新变换矩阵
 
         if overlap < 0.1 :
-            print("overlap太低了",overlap)
+            print('Overlap is too low',overlap)
             return self.__getitem__(np.random.randint(0, len(self.metadata_list)))
         if src_points.shape[0] < 130 or ref_points.shape[0] < 130:
-            #print("点太少了")
             return self.__getitem__(np.random.randint(0, len(self.metadata_list)))
         data_dict['overlap'] = overlap
 
@@ -303,61 +270,3 @@ class point_nd_Dataset(torch.utils.data.Dataset):
         data_dict['tgt_density'] = tgt_density,
 
         return data_dict
-'''
-  
-##
-def main():
-    # 配置数据集参数（请根据实际情况修改路径和参数）
-    dataset_root = None  # 此处代码中并未实际使用，可保持为 None
-    metadata_root = None  # 同样本例中未用，可以保持为 None
-    subset = 'train'  # 或者其他你数据集中的子集名称
-
-    # 实例化你的数据集
-    dataset = point_nd_Dataset(
-        dataset_root=dataset_root,
-        metadata_root=metadata_root,
-        subset=subset,
-        point_limit=10000,
-        use_augmentation=True,  # 是否启用数据增强
-        augmentation_noise=0.005,
-        augmentation_rotation=1,
-        augmentation_crop=True,
-        point_keep_ratio=0.7,
-        overlap_threshold=0.3,  # 根据需要设置
-        return_corr_indices=True,  # 是否返回对应关系索引
-        matching_radius=2.0,  # 用于计算对应关系的半径
-        rotated=True  # 是否启用额外旋转
-    )
-
-    print("数据集样本数:", len(dataset))
-
-    # 直接调用 __getitem__ 获取某个样本
-    print("直接遍历数据集，打印 overlap:")
-    for i in range(len(dataset)):
-        sample = dataset[i]
-        if sample['overlap']< 0.10:
-            print(f"样本 {i} 的 overlap: {sample['overlap']}")
-
-
-
-    # 或者使用 DataLoader 进行批处理检查
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, collate_fn=lambda x: x[0])
-    
-
-    for i, data in enumerate(dataloader):
-        print(f"Batch {i}:")
-        for key, value in data.items():
-            if isinstance(value, np.ndarray):
-                print(f"  {key}: {value.shape}")
-            elif isinstance(value, torch.Tensor):
-                print(f"  {key}: {value.shape}")
-            else:
-                print(f"  {key}: {value}")
-        # 这里只打印一个批次，调试完毕后可以 break 掉
-        if i >= 0:
-            break
-
-
-if __name__ == "__main__":
-    main()
-'''

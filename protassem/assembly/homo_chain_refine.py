@@ -1,22 +1,5 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Step 5：同源链精修（homo-chain-refine）。
-
-在 Step4（同源域精修）之后运行：用拟合好的同源链当模板，修拟合差的链
-（结构域缺失 / 结构域方位错 → 表现为 cc 低）。
-
-触发判定（两级）：
-  1. 必须存在同源链（Seq_ID 分组）。
-  2. 同源组内链 cc 有分化：链 cc 差 ≤ chain_eps(0.02) → 该组跳过；
-     否则比较“最好链 vs 较差链”的各结构域 cc，确认差链确有结构域变差才修。
-
-修复：差链用同源组里 cc 更高的链当模板（序列叠合搬到本帧 + 密度优化），多进程并行生成候选，
-clash 门控选最优，优于原链才替换。好链固定不动。重建复合物。
-
-复用项目已有：core.scoring.calculate_cc_mask、core.similarity.calculate_seqid、
-fitting.local_optimizer.local_optimize、assembly.refine.tr_rmsd.calculate_and_align_with_sequence、
-check_clash.calculate_overlap_ratio_numpy（clash）。
-"""
 import os
 import re
 import sys
@@ -35,7 +18,7 @@ from protassem.fitting.local_optimizer import local_optimize
 from protassem.assembly.refine.tr_rmsd import calculate_and_align_with_sequence
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))      # demo_reg 根（check_clash 在此）
+_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 USALIGN = os.path.join(os.path.dirname(_HERE), "core", "USalign")
@@ -53,7 +36,6 @@ def _parser_for(path):
 
 
 def split_chains(structure_file, out_dir):
-    """拆单链 PDB（保留原链号）。返回 [(chain_id, pdb_path), ...]。"""
     os.makedirs(out_dir, exist_ok=True)
     struct = _parser_for(structure_file).get_structure("s", structure_file)
     model = next(iter(struct))
@@ -80,7 +62,6 @@ def split_chains(structure_file, out_dir):
 
 
 def _slice_domain(chain_pdb, ranges, out_pdb):
-    """按残基范围 ranges=[(s,e),...] 从链结构切出一个域，写 out_pdb。"""
     s = PDBParser(QUIET=True).get_structure("c", chain_pdb)
     ch = Chain.Chain("A")
     for model in s:
@@ -103,8 +84,6 @@ def _slice_domain(chain_pdb, ranges, out_pdb):
 
 
 def _count_breaks(chain_pdb, ranges, workdir, loose_max=10.0):
-    # 按 domain_ranges 切域后用 Step4 连接评分统计断开(无效连接)数；断开=接缝 CA-CA>loose_max(默认10A)。
-    # 无 ranges 或不足 2 域时返回 0。
     if not ranges:
         return 0
     os.makedirs(workdir, exist_ok=True)
@@ -128,10 +107,8 @@ def _count_breaks(chain_pdb, ranges, workdir, loose_max=10.0):
 
 
 # ----------------------------------------------------------------------
-# 并行：Seq_ID 分组 / cc_mask
 # ----------------------------------------------------------------------
 def _seqid_worker(a):
-    """worker：只跑 USalign（P5 规定 SQLite 由父进程查询/写入，worker 不碰库）。"""
     return usalign_pair(a[0], a[1], USALIGN)[1]
 
 
@@ -185,13 +162,11 @@ def _quiet_align(ref_pdb, mob_pdb, out_pdb):
 
 
 def _clash_overlap(pdb_a, pdb_b):
-    """复用 check_clash 的 numpy CA 重叠比（惰性 import，避免 fork 前引入 torch）。"""
     import check_clash
     return check_clash.calculate_overlap_ratio_numpy(pdb_a, pdb_b, clash_distance=3.0)
 
 
 # ----------------------------------------------------------------------
-# 候选 worker（并行）：donor 叠到 target 帧 + 密度优化（内部 1 进程，避免嵌套 Pool）
 # ----------------------------------------------------------------------
 def _cand_worker(arg):
     cid, dcid, target_path, donor_path, density, res, cont, out_pdb = arg
@@ -209,7 +184,6 @@ def _cand_worker(arg):
 
 
 def _anchor_cand_worker(arg):
-    # 逐域锚定：把模板 donor(C) 锚到目标链第 dnum 域上 + 密度优化
     cid, dnum, segs, target_path, donor_path, density, res, cont, out_pdb = arg
     ref = out_pdb + ".ref.pdb"
     if not _slice_domain(target_path, segs, ref):
@@ -228,7 +202,6 @@ def _anchor_cand_worker(arg):
 
 
 # ----------------------------------------------------------------------
-# 残基覆盖检测 + 缺失域补回
 # ----------------------------------------------------------------------
 def _get_resids(pdb_path):
     resids = set()
@@ -287,45 +260,38 @@ def _fill_worker(arg):
 
 
 # ----------------------------------------------------------------------
-# 主入口
 # ----------------------------------------------------------------------
 def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_cif,
                           workdir, domain_ranges=None, nproc=8, seqid_thr=0.9,
                           chain_eps=0.02, domain_eps=0.02, clash_thr=0.1,
                           eps=0.003, log=print):
-    """对复合物做同源链精修。domain_ranges: {chain_id: {dnum: [(s,e),...]}}（可选，用于域级判定）。
-
-    返回 out_cif（有改动）或 None（无需/未改动）。
-    """
     os.makedirs(workdir, exist_ok=True)
     chains = split_chains(complex_file, os.path.join(workdir, "chains"))
     if len(chains) < 2:
-        log("homo-chain-refine: 链数 <2，跳过")
+        log('homo-chain-refine: fewer than 2 chains, skipping')
         return None
     groups = homolog_groups(chains, seqid_thr, nproc=nproc)
-    log("homo-chain-refine 同源分组: %s" % [[chains[i][0] for i in g] for g in groups])
+    log('homo-chain-refine homologous groups: %s' % [[chains[i][0] for i in g] for g in groups])
     if all(len(g) < 2 for g in groups):
-        log("homo-chain-refine: 无同源链，跳过")
+        log('homo-chain-refine: no homologous chains, skipping')
         return None
 
     paths = [p for _, p in chains]
     cc_list = parallel_cc(paths, density_mrc, resolution, contour, nproc=nproc)
     cc = {chains[i][0]: cc_list[i] for i in range(len(chains))}
     id2path = {cid: p for cid, p in chains}
-    log("homo-chain-refine 链 cc: %s" % {c: round(cc[c], 4) for c, _ in chains})
+    log('homo-chain-refine chain CC: %s' % {c: round(cc[c], 4) for c, _ in chains})
 
     opt_dir = os.path.join(workdir, "opt")
     os.makedirs(opt_dir, exist_ok=True)
     brk_dir = os.path.join(workdir, "breaks")
 
-    # ---- 每条链断开数（按 domain_ranges 切域，Step4 连接评分，断开阈值 10A）----
     breaks = {}
     for cid, path in chains:
         r = domain_ranges.get(cid) if domain_ranges else None
         breaks[cid] = _count_breaks(path, r, os.path.join(brk_dir, cid))
-    log("homo-chain-refine 各链断开数: %s" % {c: breaks[c] for c, _ in chains})
+    log('homo-chain-refine chain break counts: %s' % {c: breaks[c] for c, _ in chains})
 
-    # ---- 每组选最好链作模板：先连续(断开少) 再 cc 高 ----
     group_best = {}
     for g in groups:
         cids = [chains[i][0] for i in g]
@@ -333,7 +299,6 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
         for c in cids:
             group_best[c] = b
 
-    # ---- 触发：比最好链断开更多，或有更差的域 ----
     to_refine = set()
     for g in groups:
         if len(g) < 2:
@@ -354,9 +319,8 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
     orig_nres = {cid: len(_get_resids(id2path[cid])) for cid, _ in chains}
     changed = False
     if not to_refine:
-        log("homo-chain-refine: 无需精修的差链")
+        log('homo-chain-refine: no weak chains needing refinement')
 
-    # ---- 候选：逐域锚定（把模板 C 分别锚到目标链每个同源域上）----
     jobs = []
     for cid in to_refine:
         b = group_best[cid]
@@ -367,7 +331,7 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
             out_pdb = os.path.join(opt_dir, "%s_from_%s_anchor%s.pdb" % (cid, b, dnum))
             jobs.append((cid, dnum, segs, id2path[cid], id2path[b],
                          density_mrc, resolution, contour, out_pdb))
-    log("homo-chain-refine 锚定候选任务数: %d (并行 %d)" % (len(jobs), nproc))
+    log('homo-chain-refine anchored candidate tasks: %d (workers %d)' % (len(jobs), nproc))
     if jobs:
         with Pool(min(nproc, len(jobs))) as pool:
             results = pool.map(_anchor_cand_worker, jobs)
@@ -378,27 +342,23 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
         if pth:
             cand_of.setdefault(cid, []).append((dnum, ck, pth))
 
-    # ---- 取舍/防重叠：cc 高占位、cc 低让位换槽，clash 为硬门 ----
-    # 模板为刚体放置，断开数不随锚定改变（= 模板自身断开数）
     tmpl_breaks = {cid: breaks.get(group_best[cid], 0) for cid in to_refine}
     accepted = []
 
     def clash_of(path):
         return sum(_clash_overlap(path, ap) for _, ap in accepted)
 
-    # 不修的链（含模板 C）按原位姿放入作 clash 基线
     for cid, _ in chains:
         if cid not in to_refine:
             accepted.append((cid, best_path[cid]))
 
-    # 备好每条要修链的候选：orig + 各锚定落点
     cand_pool = {}
     for cid in to_refine:
         cands = [{"label": "orig", "path": id2path[cid],
                   "cc": cc[cid], "breaks": breaks[cid]}]
         for dnum, ck, pth in cand_of.get(cid, []):
             if len(_get_resids(pth)) < orig_nres[cid] * 0.9:
-                log("    %s 锚定域%s 丢残基, 跳过" % (cid, dnum))
+                log('    %s anchor domain%s lost residues, skipping' % (cid, dnum))
                 continue
             cands.append({"label": "anchor%s" % dnum, "path": pth,
                           "cc": ck, "breaks": tmpl_breaks[cid]})
@@ -408,7 +368,6 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
         a = [c["cc"] for c in cand_pool[cid] if c["label"] != "orig"]
         return max(a) if a else cand_pool[cid][0]["cc"]
 
-    # 贪心：最佳锚定 cc 高的链先占位，cc 低的让位换槽
     for cid in sorted(to_refine, key=_best_anchor_cc, reverse=True):
         cands = cand_pool[cid]
         for c in cands:
@@ -422,15 +381,14 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
         if winner is not o:
             best_path[cid] = winner["path"]
             changed = True
-            log("  链 %s: 断开%d->%d cc%.4f->%.4f clash%.3f->%.3f [%s]" %
+            log('  Chain %s: breaks%d->%d cc%.4f->%.4f clash%.3f->%.3f [%s]' %
                 (cid, o["breaks"], winner["breaks"], o["cc"], winner["cc"],
                  o["clash"], winner["clash"], winner["label"]))
         else:
-            log("  链 %s: 保留原位姿 (断开%d cc%.4f clash%.3f)" %
+            log('  Chain %s: retaining original pose (breaks%d cc%.4f clash%.3f)' %
                 (cid, o["breaks"], o["cc"], o["clash"]))
         accepted.append((cid, best_path[cid]))
 
-    # ---- 缺失域补回 ----
     resid_map = {cid: _get_resids(best_path[cid]) for cid, _ in chains}
     fill_dir = os.path.join(workdir, "fill")
     fill_jobs = []
@@ -458,7 +416,7 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
                                   density_mrc, resolution, contour, fill_dir, missing))
     if fill_jobs:
         os.makedirs(fill_dir, exist_ok=True)
-        log("域补回任务: %d" % len(fill_jobs))
+        log('Domain restoration tasks: %d' % len(fill_jobs))
         if nproc > 1 and len(fill_jobs) > 1:
             with Pool(min(nproc, len(fill_jobs))) as pool:
                 fill_results = pool.map(_fill_worker, fill_jobs)
@@ -466,26 +424,25 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
             fill_results = [_fill_worker(j) for j in fill_jobs]
         for c, fpath, fcc, n_added in fill_results:
             if fpath is None:
-                log("  链 %s: 补回失败" % c)
+                log('  Chain %s: restoration failed' % c)
                 continue
             orig_cc = cc.get(c, 0.0)
             cl = sum(_clash_overlap(fpath, best_path[oc])
                      for oc, _ in chains if oc != c)
-            log("  链 %s: +%d 残基, cc %.4f -> %.4f, clash=%.3f" %
+            log('  Chain %s: +%d residues, cc %.4f -> %.4f, clash=%.3f' %
                 (c, n_added, orig_cc, fcc, cl))
             if cl <= clash_thr:
                 best_path[c] = fpath
                 cc[c] = fcc
                 changed = True
-                log("    -> 接受 (补回完整)")
+                log('    -> accepted (fully restored)')
             else:
-                log("    -> 拒绝 (clash %.3f > %.2f)" % (cl, clash_thr))
+                log('    -> rejected (clash %.3f > %.2f)' % (cl, clash_thr))
 
     if not changed:
-        log("homo-chain-refine: 无变更，跳过输出")
+        log('homo-chain-refine: no changes, skipping output')
         return None
 
-    # ---- 重建复合物 ----
     merged = Structure.Structure("homo")
     mm = Model.Model(0)
     merged.add(mm)
@@ -498,13 +455,12 @@ def run_homo_chain_refine(complex_file, density_mrc, resolution, contour, out_ci
     io = MMCIFIO()
     io.set_structure(merged)
     io.save(out_cif)
-    log("homo-chain-refine 已写出: %s" % out_cif)
+    log('homo-chain-refine wrote: %s' % out_cif)
     return out_cif
 
 
 def _domain_worse(cid, best_cid, id2path, domain_ranges, mrc, res, cont,
                   opt_dir, domain_eps, nproc, log):
-    """比较差链 cid 与最好链 best_cid 的各域 cc；差链某域明显更差则返回 True。"""
     ranges = domain_ranges.get(cid) or {}
     if not ranges:
         return True
@@ -524,14 +480,13 @@ def _domain_worse(cid, best_cid, id2path, domain_ranges, mrc, res, cont,
     worse = False
     for dnum, bc, gc in zip(dnums, bad_cc, good_cc):
         if gc - bc > domain_eps:
-            log("    链 %s 域%s cc=%.3f < 最好链 %s 域 cc=%.3f -> 该域差" %
+            log('    Chain %s domain%s cc=%.3f < best chain %s domain cc=%.3f -> weak domain' %
                 (cid, dnum, bc, best_cid, gc))
             worse = True
     return worse
 
 
 # ----------------------------------------------------------------------
-# 独立域补回（orchestrator 无条件调用，不需要 --homo-chain-refine）
 # ----------------------------------------------------------------------
 def fill_domain_gaps(complex_file, density_mrc, resolution, contour, out_cif,
                      workdir, nproc=8, seqid_thr=0.9, clash_thr=0.1, log=print):
@@ -574,7 +529,7 @@ def fill_domain_gaps(complex_file, density_mrc, resolution, contour, out_cif,
         return None
 
     os.makedirs(fill_dir, exist_ok=True)
-    log("域补回: %d 条链缺失残基" % len(fill_jobs))
+    log('Domain restoration: %d chains have missing residues' % len(fill_jobs))
     paths = [p for _, p in chains]
     cc_list = parallel_cc(paths, density_mrc, resolution, contour, nproc=nproc)
     cc = {chains[i][0]: cc_list[i] for i in range(len(chains))}
@@ -589,19 +544,19 @@ def fill_domain_gaps(complex_file, density_mrc, resolution, contour, out_cif,
     changed = False
     for c, fpath, fcc, n_added in fill_results:
         if fpath is None:
-            log("  链 %s: 补回失败" % c)
+            log('  Chain %s: restoration failed' % c)
             continue
         orig_cc = cc.get(c, 0.0)
         cl = sum(_clash_overlap(fpath, best_path[oc]) for oc, _ in chains if oc != c)
-        log("  链 %s: +%d 残基, cc %.4f -> %.4f, clash=%.3f" %
+        log('  Chain %s: +%d residues, cc %.4f -> %.4f, clash=%.3f' %
             (c, n_added, orig_cc, fcc, cl))
         if cl <= clash_thr:
             best_path[c] = fpath
             cc[c] = fcc
             changed = True
-            log("    -> 接受")
+            log('    -> accepted')
         else:
-            log("    -> 拒绝 (clash %.3f > %.2f)" % (cl, clash_thr))
+            log('    -> rejected (clash %.3f > %.2f)' % (cl, clash_thr))
 
     if not changed:
         return None
@@ -618,12 +573,11 @@ def fill_domain_gaps(complex_file, density_mrc, resolution, contour, out_cif,
     io = MMCIFIO()
     io.set_structure(merged)
     io.save(out_cif)
-    log("域补回写出: %s" % out_cif)
+    log('Domain restoration wrote: %s' % out_cif)
     return out_cif
 
 
 # ----------------------------------------------------------------------
-# 单测入口
 # ----------------------------------------------------------------------
 def main():
     p = argparse.ArgumentParser()

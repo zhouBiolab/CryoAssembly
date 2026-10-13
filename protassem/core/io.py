@@ -69,12 +69,6 @@ def write_mrc(data, origin, voxel_size, file_path):
 
 
 def load_sample_points(file_path, with_density=False):
-    """读取点云 TXT（薄包装，保留历史签名）。
-
-    Returns:
-        (points, normals) 或 (points, normals, densities)，均为 float64 数组。
-        格式契约与解析规则见 protassem.core.points_txt。
-    """
     cloud = read_point_cloud(file_path)
     if with_density:
         return cloud.points, cloud.vectors, cloud.densities

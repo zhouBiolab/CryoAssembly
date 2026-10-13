@@ -1,21 +1,6 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""geo_sym_refine.py — 同源 refine（纯同源，无对称信息）。
-
-用拟合好的同源链当模板，序列叠合搬到拟合差的链当前位姿，再密度优化，clash 门控选最优。
-
-流程：
-  1. 拆单链；Seq_ID 同源分组。
-  2. 逐链 cc_mask（并行）。
-  3. 组内 cc 降序：组内最好链当模板；cc 与最好链相差很小的链视为“好”，保留不动。
-     差链候选 = orig + 每个 cc 更高的 donor(叠到本帧 + 密度优化)。
-  4. 候选生成（align + local_optimize）跨“差链×donor” **多进程并行**（每个 local_optimize
-     用 num_processes=1，外层 Pool 并行，避免嵌套）。
-  5. 顺序做 clash 门控：与已定链不显著重叠的候选里 cc 最高；优于 orig+eps 才替换。
-  6. 重组输出。
-
-提速：初始 cc_mask、同源分组 USalign、候选优化 三处都并行。
-"""
+'Refine homologous chain and domain poses.'
 import os
 import re
 import sys
@@ -53,7 +38,6 @@ def _parser_for(path):
 
 
 def split_chains(structure_file, out_dir):
-    """拆单链 PDB（保留原链号）。返回有序 [(chain_id, pdb_path), ...]。"""
     os.makedirs(out_dir, exist_ok=True)
     struct = _parser_for(structure_file).get_structure("s", structure_file)
     model = next(iter(struct))
@@ -80,7 +64,6 @@ def split_chains(structure_file, out_dir):
 
 
 # ----------------------------------------------------------------------
-# 同源判定（Seq_ID）+ 并行分组
 # ----------------------------------------------------------------------
 def _usalign_seqid(p1, p2):
     try:
@@ -123,7 +106,6 @@ def homolog_groups(chains, seqid_thr=0.9, nproc=8):
 
 
 # ----------------------------------------------------------------------
-# 并行 cc_mask
 # ----------------------------------------------------------------------
 def _cc_worker(args):
     mrc, path, res, cont = args
@@ -139,10 +121,8 @@ def parallel_cc(paths, mrc, res, cont, nproc=8):
 
 
 # ----------------------------------------------------------------------
-# 对齐
 # ----------------------------------------------------------------------
 def _quiet_align(ref_pdb, mob_pdb, out_pdb):
-    """tr_rmsd 序列叠合：把 mob 搬到 ref 的位姿，输出 out。静默。"""
     try:
         with contextlib.redirect_stdout(_io.StringIO()):
             calculate_and_align_with_sequence(ref_pdb, mob_pdb, out_pdb)
@@ -153,8 +133,6 @@ def _quiet_align(ref_pdb, mob_pdb, out_pdb):
 
 
 # ----------------------------------------------------------------------
-# 候选生成 worker（并行）：donor 叠到 target 帧 + 密度优化
-#   每个 worker 内 local_optimize 用 num_processes=1（不开内层 Pool，避免嵌套）。
 # ----------------------------------------------------------------------
 def _cand_worker(arg):
     cid, donor_cid, target_path, donor_path, density, res, cont, out_pdb = arg
@@ -172,7 +150,6 @@ def _cand_worker(arg):
 
 
 # ----------------------------------------------------------------------
-# 残基覆盖检测 + 缺失域补回
 # ----------------------------------------------------------------------
 def _get_resids(pdb_path):
     resids = set()
@@ -231,27 +208,25 @@ def _fill_worker(arg):
 
 
 # ----------------------------------------------------------------------
-# 主流程
 # ----------------------------------------------------------------------
 def refine(complex_file, density_mrc, resolution, contour, out_cif,
            workdir, group="?", seqid_thr=0.9, eps=0.003, nproc=8,
            clash_thr=0.1, good_margin=0.03):
     chains = split_chains(complex_file, os.path.join(workdir, "chains"))
-    print("链数: %d  标记: %s" % (len(chains), group))
+    print('Chains: %d  labels: %s' % (len(chains), group))
     groups = homolog_groups(chains, seqid_thr, nproc=nproc)
-    print("同源分组: %s" % [[chains[i][0] for i in g] for g in groups])
+    print('Homologous groups: %s' % [[chains[i][0] for i in g] for g in groups])
 
     paths = [p for _, p in chains]
     cc_list = parallel_cc(paths, density_mrc, resolution, contour, nproc=nproc)
     cc = {chains[i][0]: cc_list[i] for i in range(len(chains))}
-    print("初始 cc_mask: %s" % {cid: round(cc[cid], 4) for cid, _ in chains})
+    print('Initial cc_mask: %s' % {cid: round(cc[cid], 4) for cid, _ in chains})
 
     id2path = {cid: path for cid, path in chains}
     opt_dir = os.path.join(workdir, "opt")
     os.makedirs(opt_dir, exist_ok=True)
     orig_nres = {cid: len(_get_resids(id2path[cid])) for cid, _ in chains}
 
-    # ---- 1. 决定好链/差链；为差链组装 (差链 × cc更高donor) 任务 ----
     is_good = {}
     jobs = []
     for g in groups:
@@ -260,18 +235,17 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
         for i in members:
             cid = chains[i][0]
             if best_cc - cc[cid] < good_margin:
-                is_good[cid] = True                       # 好链：保留不动
+                is_good[cid] = True
                 continue
             is_good[cid] = False
-            for j in members:                              # 所有 cc 更高的 donor
+            for j in members:
                 dcid = chains[j][0]
                 if cc[dcid] > cc[cid]:
                     out_pdb = os.path.join(opt_dir, "%s_from_%s.pdb" % (cid, dcid))
                     jobs.append((cid, dcid, id2path[cid], id2path[dcid],
                                  density_mrc, resolution, contour, out_pdb))
 
-    # ---- 2. 并行生成所有候选（align + local_optimize, 每个 1 进程）----
-    print("候选优化任务数: %d (并行 %d)" % (len(jobs), nproc))
+    print('Candidate optimization tasks: %d (workers %d)' % (len(jobs), nproc))
     if jobs:
         with Pool(min(nproc, len(jobs))) as pool:
             results = pool.map(_cand_worker, jobs)
@@ -282,7 +256,6 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
         if pth:
             cand_of.setdefault(cid, []).append((dcid, ck, pth))
 
-    # ---- 3. 顺序 clash 门控选择 ----
     best_path = dict(id2path)
     accepted = []
 
@@ -291,17 +264,17 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
                    for _, ap in accepted)
 
     for g in groups:
-        for i in sorted(g, key=lambda i: cc[chains[i][0]], reverse=True):  # cc 高在前
+        for i in sorted(g, key=lambda i: cc[chains[i][0]], reverse=True):
             cid = chains[i][0]
             if is_good.get(cid):
                 accepted.append((cid, best_path[cid]))
-                print("  链 %s: cc %.4f 保留(好链)" % (cid, cc[cid]))
+                print('  Chain %s: retaining cc %.4f (good chain)' % (cid, cc[cid]))
                 continue
             cand = [("orig", cc[cid], id2path[cid])]
             for dcid, ck, pth in cand_of.get(cid, []):
                 cand_nr = len(_get_resids(pth))
                 if cand_nr < orig_nres[cid] * 0.9:
-                    print("    候选 from_%s 丢残基 (%d->%d), 跳过" % (dcid, orig_nres[cid], cand_nr))
+                    print('    Candidate from_%s lost residues (%d->%d), skipping' % (dcid, orig_nres[cid], cand_nr))
                     continue
                 cand.append(("from_%s" % dcid, ck, pth))
             scored = [(lab, c, pth, clash_of(pth)) for (lab, c, pth) in cand]
@@ -312,14 +285,13 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
                 lab, bcc, bpath, bclash = min(scored, key=lambda s: s[3])
             if bcc > cc[cid] + eps:
                 best_path[cid] = bpath
-                print("  链 %s: cc %.4f -> %.4f  [%s, clash=%.3f]" %
+                print('  Chain %s: cc %.4f -> %.4f  [%s, clash=%.3f]' %
                       (cid, cc[cid], bcc, lab, bclash))
             else:
-                print("  链 %s: cc %.4f 保留(最佳候选 %s=%.4f, clash=%.3f)" %
+                print('  Chain %s: retaining cc %.4f (best candidate %s=%.4f, clash=%.3f)' %
                       (cid, cc[cid], lab, bcc, bclash))
             accepted.append((cid, best_path[cid]))
 
-    # ---- 3.5. 缺失域补回：从同源完整链补回丢失残基 ----
     resid_map = {cid: _get_resids(best_path[cid]) for cid, _ in chains}
     fill_jobs = []
     fill_dir = os.path.join(workdir, "fill")
@@ -348,7 +320,7 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
 
     if fill_jobs:
         os.makedirs(fill_dir, exist_ok=True)
-        print("域补回任务: %d" % len(fill_jobs))
+        print('Domain restoration tasks: %d' % len(fill_jobs))
         if nproc > 1 and len(fill_jobs) > 1:
             with Pool(min(nproc, len(fill_jobs))) as pool:
                 fill_results = pool.map(_fill_worker, fill_jobs)
@@ -356,22 +328,21 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
             fill_results = [_fill_worker(j) for j in fill_jobs]
         for cid, fpath, fcc, n_added in fill_results:
             if fpath is None:
-                print("  链 %s: 补回失败" % cid)
+                print('  Chain %s: restoration failed' % cid)
                 continue
             orig_cc = cc.get(cid, 0.0)
             drop = orig_cc - fcc
             cl = sum(check_clash.calculate_overlap_ratio_numpy(fpath, best_path[oc])
                      for oc, _ in chains if oc != cid)
-            print("  链 %s: +%d 残基, cc %.4f -> %.4f, clash=%.3f" %
+            print('  Chain %s: +%d residues, cc %.4f -> %.4f, clash=%.3f' %
                   (cid, n_added, orig_cc, fcc, cl))
             if cl <= clash_thr:
                 best_path[cid] = fpath
                 cc[cid] = fcc
-                print("    -> 接受 (补回完整)")
+                print('    -> accepted (fully restored)')
             else:
-                print("    -> 拒绝 (clash %.3f > %.2f)" % (cl, clash_thr))
+                print('    -> rejected (clash %.3f > %.2f)' % (cl, clash_thr))
 
-    # ---- 4. 重组 ----
     merged = Structure.Structure("sym")
     mm = Model.Model(0)
     merged.add(mm)
@@ -384,7 +355,7 @@ def refine(complex_file, density_mrc, resolution, contour, out_cif,
     io = MMCIFIO()
     io.set_structure(merged)
     io.save(out_cif)
-    print("已写出: %s" % out_cif)
+    print('Wrote: %s' % out_cif)
     return out_cif
 
 

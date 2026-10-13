@@ -99,15 +99,13 @@ class RPEConditionalTransformer(nn.Module):
         self.return_attention_scores = return_attention_scores
         self.parallel = parallel
 
-        # 计算自注意力层的总数 1/3 ,2/3 ,3/3
         self.num_self_attention_layers = sum(1 for block in blocks if block == 'self')
 
     def forward(self, feats0, feats1, embeddings0, embeddings1,  points0=None, points1=None,masks0=None, masks1=None):
         attention_scores = []
-        self_attention_idx = 0  # 追踪当前是第几个自注意力层
+        self_attention_idx = 0
         for i, block in enumerate(self.blocks):
             if block == 'self':
-                #自适应自注意力
                 feats0, scores0 = self.layers[i](feats0, feats0, embeddings0, points=points0, layer_idx=self_attention_idx, total_layers=self.num_self_attention_layers,memory_masks=masks0)
                 feats1, scores1 = self.layers[i](feats1, feats1, embeddings1, points=points1, layer_idx=self_attention_idx, total_layers=self.num_self_attention_layers,memory_masks=masks1)
                 self_attention_idx += 1

@@ -59,7 +59,6 @@ class HypothesisProposer(nn.Module):
         src_score_mat = torch.zeros_like(score_mat)
         src_score_mat[src_batch_indices, src_topk_indices, src_indices] = src_topk_scores
         # correspondences used to vote for hypotheses
-        #原本代码是src与src相比
         voter_corr_mat = torch.logical_or(torch.gt(ref_score_mat, self.confidence_threshold), torch.gt(src_score_mat, self.confidence_threshold))
 
         # top-k hypotheses used to generate hypotheses
@@ -127,7 +126,7 @@ class HypothesisProposer(nn.Module):
         batch_inlier_masks = torch.lt(batch_corr_residuals, self.acceptance_radius)  # (P, N)(2000,N)
         #print("batch_inlier_masks",batch_inlier_masks.shape)
         #ir = batch_inlier_masks.float().mean(dim=1)
-        inlier_counts = batch_inlier_masks.long().sum(dim=1)  # 或 batch_inlier_masks.sum(dim=1)
+        inlier_counts = batch_inlier_masks.long().sum(dim=1)
         best_index = inlier_counts.argmax()
         #best_index = ir.argmax()
         cur_corr_scores = corr_scores * batch_inlier_masks[best_index].float()

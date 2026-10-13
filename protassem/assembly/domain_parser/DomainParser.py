@@ -42,7 +42,6 @@ import warnings
 segment_pattern=re.compile("([-]{0,1}\d+)[A-Za-z]{0,1}[-]([-]{0,1}\d+)[A-Za-z]{0,1}")
 
 def check_executable(exec_path, name):
-    '''检查可执行文件是否存在和可执行'''
     if not os.path.isfile(exec_path):
         print(f"ERROR: {name} executable not found at: {exec_path}")
         return False
@@ -53,7 +52,6 @@ def check_executable(exec_path, name):
     return True
 
 def validate_pdb_basic(pdb_file):
-    '''基本PDB文件验证'''
     try:
         with open(pdb_file, 'r') as f:
             lines = f.readlines()
@@ -70,13 +68,10 @@ def validate_pdb_basic(pdb_file):
         return False
 
 def parse_domain_residues(domain_string, debug=False):
-    '''解析结构域字符串，返回残基列表和起始残基号
-    改进版本：确保片段按照序列顺序排列'''
     segments = []
     try:
-        # 解析所有片段
         for segment in domain_string.strip('()').split(';'):
-            if not segment.strip():  # 跳过空片段
+            if not segment.strip():
                 continue
             matches = segment_pattern.findall(segment)
             if matches:
@@ -90,12 +85,10 @@ def parse_domain_residues(domain_string, debug=False):
                 print(f"    Warning: No valid segments found in {domain_string}")
             return [], None
         
-        # 按起始位置排序片段（关键改进）
         segments.sort(key=lambda x: x[0])
         if debug:
             print(f"    Sorted fragments: {segments}")
         
-        # 按排序后的顺序合并残基
         resi_list = []
         for start, end in segments:
             resi_list.extend(range(start, end + 1))
@@ -117,16 +110,13 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
     if debug:
         print(f"=== DEBUG: Starting DomainParser for {pdb_file} ===")
     
-    # 验证输入文件
     if not validate_pdb_basic(pdb_file):
         return ''
     
-    # 检查可执行文件
     if not check_executable(execpath, "DomainParser"):
         return ''
     if not check_executable(dssp_path, "DSSP"):
         return ''
-    # pulchra是可选的，只在需要时检查
     
     #### make temporary folder ####
     basename=os.path.basename(pdb_file)
@@ -145,7 +135,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
         print(f"DEBUG: Parsing PDB file with BioPython...")
     
     try:
-        # 抑制BioPython警告
         warnings.filterwarnings("ignore", module="Bio.PDB.PDBParser")
         warnings.filterwarnings("ignore", module="Bio.PDB.Atom")
         warnings.filterwarnings("ignore", module="Bio.PDB.PDBIO")
@@ -206,7 +195,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
             if debug:
                 print("DEBUG: Missing sidechain atoms, trying pulchra reconstruction...")
                 
-            # 检查pulchra是否可用
             if not check_executable(pulchra_path, "Pulchra"):
                 print("ERROR: Pulchra needed but not available")
                 shutil.rmtree(tmp_dir)
@@ -232,7 +220,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
                 shutil.rmtree(tmp_dir)
                 return ''
                 
-            # 查找重建的文件
             rebuilt_files = ["xxxx.rebuilt.pdb", "rebuilt_xxxx.pdb", "pul_xxxx.pdb"]
             pdb_file_rebuilt = None
             for rebuilt_file in rebuilt_files:
@@ -250,7 +237,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
                 shutil.rmtree(tmp_dir)
                 return ''
             
-            # 重新处理重建的文件
             try:
                 warnings.filterwarnings("ignore",module="Bio.PDB.PDBIO")
                 warnings.filterwarnings("ignore",module="Bio.PDB.PDBParser")
@@ -269,7 +255,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
                 shutil.rmtree(tmp_dir)
                 return ''
 
-            # 重新运行DomainParser
             if debug:
                 print("DEBUG: Re-running DomainParser with rebuilt structure...")
                 
@@ -337,7 +322,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
                 print(f"    Domain {domain_idx+1}: {fragment_count} fragments, "
                       f"spans residues {min_resi}-{max(resi_list)} (original order)")
 
-    # 按照最小残基号排序
     domain_info_list.sort(key=lambda x: x['min_resi'])
     
     if debug:
@@ -348,7 +332,7 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
                   f"was domain {domain_info['original_idx']+1})")
 
     #### output individual domain in correct order ####
-    sorted_domain_strings = []  # 保存排序后的结构域字符串用于最终输出
+    sorted_domain_strings = []
     
     for new_idx, domain_info in enumerate(domain_info_list):
         domain_file = basename.split('.')[0] + "_d_" + str(new_idx + 1) + ".pdb"
@@ -391,7 +375,6 @@ def DomainParser(pdb_file,execpath="domainparser2.LINUX",
             else:
                 print(f"    Residues: {resi_list}")
         
-    # 返回结果，使用排序后的结构域列表
     return '\t'.join([
         basename.split('.')[0], seqlen, domain_num, ' '.join(sorted_domain_strings)])
 
@@ -400,18 +383,15 @@ def locate_DomainParser():
     possible_names = ["domainparser2", "domainparser2.LINUX"]
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # 首先在脚本同目录查找
     for name in possible_names:
         execpath = os.path.join(script_dir, name)
         if os.path.isfile(execpath):
             return execpath
     
-    # 然后在当前目录查找
     for name in possible_names:
         if os.path.isfile(name):
             return os.path.abspath(name)
     
-    # 默认返回
     return "domainparser2"
 
 if __name__=="__main__":

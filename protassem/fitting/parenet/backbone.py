@@ -204,11 +204,10 @@ class PAREConvFPN(nn.Module):
         
         for pts in points_list:
             # pts: Tensor(N,4)
-            xyz = pts[:, :3] / scale_val  # 缩放前 3 维
-            intensity = pts[:, 3:].clone()  # 第 4 维强度
+            xyz = pts[:, :3] / scale_val
+            intensity = pts[:, 3:].clone()
             scaled_pts = torch.cat([xyz, intensity], dim=1)
             scaled_points.append(scaled_pts)
-        # 替换回 data_dict
         points_list = scaled_points
 
        # print("points_list[0][:, :3]",points_list[3][:, :3])

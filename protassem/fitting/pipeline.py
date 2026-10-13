@@ -29,19 +29,11 @@ from protassem.fitting.parenet_client import start_request
 
 log = logging.getLogger(__name__)
 
-# 局部优化的 CC 触发下限（链 / 域共用）。
-# 高分辨率密度图上轻微偏移就会让 CC 塌到很低，低初始 CC 的候选经局部优化仍可能
-# 达标；该下限只用来挡掉"完全没有信号"的退化候选，不是质量门槛。
 LOCAL_OPT_CC_FLOOR = 0.03
-# O6：请求身份计数器（同一进程内单调递增 → 两次运行的台账 request_id 序列一致）
 _REQUEST_SEQ = 0
 
 
 def _cc_worker(arg):
-    """Compute CC_mask for one pred file (worker for parallel batch CC).
-
-    失败不再伪装成低分（原实现返回 cc=None）：带文件名抛出真实错误。
-    """
     pdb_file, density_mrc, resolution, contour = arg
     try:
         cc = calculate_cc_mask(density_mrc, pdb_file, resolution, contour)
@@ -87,7 +79,6 @@ def run_fitting(target_txt, source, density_mrc, resolution, contour,
     """
     os.makedirs(output_dir, exist_ok=True)
     orig_mrc = original_density_mrc or density_mrc
-    # P3：优先复用运行级共享池；独立调用 run_fitting 时自建并在返回前释放。
     owns_context = context is None
     exec_context = context or ExecutionContext(
         pool_workers=worker_count(num_processes))
@@ -165,8 +156,6 @@ def _fit_domain(target_txt, source_txt, density_mrc, resolution, contour,
         log.error("No chain PDB found for domain fitting")
         return _fail()
 
-    # 局部优化触发下限（链/域共用 LOCAL_OPT_CC_FLOOR）。
-    # 早停阈值（stop_threshold）不做分辨率调整。
     cc_threshold = LOCAL_OPT_CC_FLOOR
 
     result = _fit_single(
@@ -215,14 +204,6 @@ def _fit_single(target_txt, source_txt, chain_pdb, output_dir,
 
 def _start_parenet(target, source, chain_pdb, output_dir, *,
                    mask_radius_factor, min_point_distance_factor):
-    """Send a fitting request to the persistent PARENet server.
-
-    Returns a request handle (poll()/terminate()) compatible with the monitor.
-    推理路径由服务端配置（`parenet_client.configure_inference_mode`，来自 RuntimeConfig）；
-    这里不额外覆盖。
-    O6：为每个请求生成 `request_id`（任务 + 进程内序号），台账据此判定归属。
-    掩码参数来自 CLI（--mask-radius-factor / --min-point-distance-factor）。
-    """
     global _REQUEST_SEQ
     task_id = os.path.basename(output_dir)
     _REQUEST_SEQ += 1
@@ -241,12 +222,6 @@ def _start_parenet(target, source, chain_pdb, output_dir, *,
 def _monitor_and_evaluate(reg_dir, density_mrc, resolution, contour,
                           chain_pdb, cc_threshold, stop_threshold,
                           temp_dir, proc, *, batch_size, context=None):
-    """按候选台账消费（O6）：固定 ID 区间批次 + 批内原策略 + 首个达标即早停。
-
-    与旧实现的唯一区别是**候选顺序不再由文件出现时机决定**：
-    批次成员 = `[0, batch_size)`、`[batch_size, 2·batch_size)`…（`end` 到达后处理末尾不足额批），
-    批内仍按 (CC 降序, 候选 id) 逐个局部优化，第一个达到 `stop_threshold` 的候选触发早停。
-    """
     task_id = os.path.basename(os.path.dirname(reg_dir))
     all_results = []
     candidates = []
@@ -256,14 +231,9 @@ def _monitor_and_evaluate(reg_dir, density_mrc, resolution, contour,
                           request_id=getattr(proc, "request_id", None))
 
     def evaluate_batch(records):
-        """批内策略不变：CC 评估 → 排序 → 逐个优化 → 首个达标即返回早停。
-
-        `CandidateConsumer` 在进入本函数前已经处理了 `error`：掩码级评估失败被跳过，
-        其余执行失败直接抛错。这里只处理 `filtered`（正常计算但没有有效候选：计数、跳过）。
-        """
         for record in records:
             if record["state"] != "ok":
-                log.warning("候选 %d 状态 %s，跳过：%s", record["id"], record["state"],
+                log.warning('Candidate %d has status %s, skipping: %s', record["id"], record["state"],
                             record.get("reason") or record.get("error") or "")
         usable = [record for record in records if record["state"] == "ok"]
         if not usable:
@@ -300,16 +270,13 @@ def _monitor_and_evaluate(reg_dir, density_mrc, resolution, contour,
         describe_request=lambda: _describe_request(proc))
 
     outcome = consumer.run()
-    # O6：这里记录的是**整个候选流消费时长**（旧实现的 candidate_scan 只表示 glob 轮询耗时）
     if outcome["skipped"]:
-        log.warning("候选台账含 %d 个非 ok 候选（filtered/error），已跳过；"
-                    "其中已消费范围内的掩码级评估失败 %d 个",
+        log.warning('Skipped %d non-ok ledger candidates (filtered/error); %d consumed mask evaluations failed',
                     len(outcome["skipped"]), outcome["skipped_mask_errors"])
 
     if outcome["early_stop"]:
         best_result = early_stop_result[0]
     else:
-        # final_select 只在"全部批次消费完且未早停"时执行（规则与原实现一致）
         best_result = _select_final_result(
             all_results, candidates, density_mrc, resolution, contour,
             stop_threshold, temp_dir, context=context)
@@ -343,11 +310,6 @@ def _hybrid_score(cc, overlap):
 
 def _select_final_result(all_results, candidates, density_mrc, resolution,
                          contour, stop_threshold, temp_dir, context=None):
-    """No early stop: among files not yet optimized, optimize the top 10 by CC
-    plus the top 10 by hybrid score (non-overlapping), then pick the best overall.
-
-    cc_mask 低于 LOCAL_OPT_CC_FLOOR 的候选不做局部优化（与 evaluate_batch 同门槛）。
-    """
     valid_r = [r for r in all_results if r["cc_mask"] is not None]
     if not valid_r:
         return None
@@ -359,7 +321,6 @@ def _select_final_result(all_results, candidates, density_mrc, resolution,
     for r in unopt:
         r["hybrid"] = _hybrid_score(r["cc_mask"], r.get("overlap", 0))
 
-    # 1) top 10 by CC_mask（并列用候选 id 作稳定次序）
     by_cc = sorted(unopt, key=lambda r: (-r["cc_mask"], r.get("candidate_id", 0)))[:10]
     chosen = {r["pdb_file"] for r in by_cc}
     # 2) top 10 by hybrid score, excluding files already picked by CC
@@ -491,7 +452,6 @@ def _verify_cc(pdb_file, density_mrc, resolution, contour):
 # ======================================================================
 
 def _batch_cc(pdb_files, density_mrc, resolution, contour, context):
-    """Compute CC_mask for a batch of PDB files（复用运行级池，按输入顺序归并）。"""
     args = [(f, density_mrc, resolution, contour) for f in pdb_files]
     return context.map(_cc_worker, args)
 
@@ -556,7 +516,6 @@ def _kill(proc):
 
 
 def _describe_request(proc):
-    """请求结束但台账缺 end 时的诊断（P1-3）：区分"服务死亡"与"服务端漏写 end"。"""
     try:
         return proc.describe_failure()
     except Exception:

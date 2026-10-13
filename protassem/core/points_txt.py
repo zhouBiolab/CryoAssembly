@@ -1,19 +1,3 @@
-"""点云 TXT 的统一读写（Sample 点云格式的单一实现）。
-
-文件布局（仓库内 `Sample` 二进制实测，5 行头部 + 数据行）：
-
-    line 0  sample        坐标缩放（采样体素边长，Å）
-    line 1  盒子尺寸      实测恒为立方；不解析，原样保留
-    line 2  未使用        不解析，原样保留
-    line 3  origin x y z  盒子原点（Å）
-    line 4  未使用        不解析，原样保留
-    line 5+ 成对数据      (index x y z) 与 (vx vy vz density)
-
-只有 line 0 与 line 3 被解释；line 1/2/4 逐字保留，便于"过滤后原样写回"。
-
-数据行按**顺序两两成对**，不依赖绝对行号的奇偶：缺行或字段数不对会带行号报错，
-不会像旧实现那样把点、法向量和密度静默错位。
-"""
 
 import collections
 
@@ -35,21 +19,6 @@ PointCloud = collections.namedtuple(
 
 
 def read_point_cloud(path):
-    """读取点云 TXT。
-
-    Returns:
-        PointCloud:
-            points/vectors/densities: float64 数组，坐标已按
-                ``voxel * sample + origin`` 换算为 Å；
-            indices: int64 数组（体素索引）；
-            sample/origin: 头部解析值；
-            header_lines: 原始 5 行头部；
-            data_lines: 原始数据行对 ``[(坐标行, 向量行), ...]``。
-
-    Raises:
-        ValueError: 头部不足 5 行、数据行不成对、字段数不是 4、数值无法解析；
-            消息包含 ``文件:行号``。
-    """
     with open(path, encoding="utf-8") as handle:
         lines = handle.read().splitlines()
 
@@ -97,13 +66,11 @@ def read_point_cloud(path):
 
 
 def line_mapping(cloud):
-    """每个点对应的原始行下标 ``(坐标行, 向量行)``，用于按点过滤后原样写回。"""
     return [(HEADER_LINES + 2 * i, HEADER_LINES + 2 * i + 1)
             for i in range(len(cloud.data_lines))]
 
 
 def read_point_cloud_file(path):
-    """读取点云并返回 POINT_DTYPE 结构化数组（demo_mask/sw_mask 的既有格式）。"""
     cloud = read_point_cloud(path)
     data = np.zeros(len(cloud.points), dtype=POINT_DTYPE)
     data["index"] = cloud.indices
@@ -114,13 +81,6 @@ def read_point_cloud_file(path):
 
 
 def write_filtered(path, cloud, keep_indices):
-    """按 keep_indices 写回原始数据行对，头部原样复制（保留文本精度）。
-
-    Args:
-        path: 输出路径
-        cloud: read_point_cloud 的结果
-        keep_indices: 要保留的点下标（顺序即写出顺序）
-    """
     with open(path, "w", encoding="utf-8") as handle:
         for line in cloud.header_lines:
             handle.write(line + "\n")
@@ -132,17 +92,6 @@ def write_filtered(path, cloud, keep_indices):
 
 def write_point_cloud(path, points, vectors, densities=None, indices=None,
                       sample=1.0, origin=(0.0, 0.0, 0.0)):
-    """由数组生成点云 TXT（坐标按 ``(point - origin) / sample`` 写回体素坐标）。
-
-    Args:
-        path: 输出路径
-        points: (N, 3) 绝对坐标（Å）
-        vectors: (N, 3) 法向量
-        densities: (N,) 密度；None 写 0
-        indices: (N,) 体素索引；None 写 0..N-1
-        sample: 头部坐标缩放；默认 1.0（坐标按 Å 原样写出）
-        origin: 头部原点偏移
-    """
     points = np.asarray(points, dtype=np.float64)
     vectors = np.asarray(vectors, dtype=np.float64)
     count = len(points)
@@ -168,7 +117,6 @@ def write_point_cloud(path, points, vectors, densities=None, indices=None,
 
 
 def _split(path, lineno, line, expected):
-    """按空白切分并校验字段数（严格 4 列，不做宽容解析）。"""
     parts = line.split()
     if len(parts) != 4:
         raise ValueError("%s:%d: expected 4 fields <%s>, got %d"

@@ -122,14 +122,6 @@ def apply_transformation(points, R, t):
 # ======================================================================
 
 def transform_pdb(input_pdb, R, t, output_pdb, center=None):
-    """Read PDB, apply rotation+translation to all ATOM coords, write PDB.
-
-    写出坐标 = R (x - center) + center + t。
-
-    center=None 时绕**原子质心**旋转（局部优化沿用该参数化，不要改）；
-    配准输出边界应显式传入**点云质心** c_src——网络位姿是在点云质心系求解的，
-    否则写出坐标会出现 (I - R)(c_atom - c_src) 的系统偏移（T01 实测）。
-    """
     from protassem.fitting.local_optimizer import StructureData
 
     structure = StructureData(input_pdb)
@@ -193,11 +185,6 @@ def generate_optimal_pdb_path(original_path, overlap_score, mask_name):
 # ======================================================================
 
 def find_mask_files(temp_dir):
-    """Find mask .txt files in a temp directory.
-
-    O6：按名字排序返回 —— 若沿用 `glob` 的目录顺序，候选 id 所依赖的"稳定生成顺序"
-    就没有依据（不得靠变量名推定顺序）。
-    """
     if not os.path.exists(temp_dir):
         return []
     skip = {"all_mask_centers.txt", "masks_report.txt"}

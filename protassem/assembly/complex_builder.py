@@ -30,7 +30,6 @@ PROGRAM_OUTPUTS = ("assembled_complex.cif", "assembled_complex_all.cif",
 
 
 def clear_stale_outputs(output_dir):
-    """删除上一轮遗留的程序管理产物，避免把旧结果误读成本次结果。"""
     removed = []
     for name in PROGRAM_OUTPUTS:
         path = os.path.join(output_dir, name)
@@ -45,23 +44,6 @@ def clear_stale_outputs(output_dir):
 
 def build_complex(accepted_chains, output_dir, cif_key="fitted_cif",
                   out_name="assembled_complex.cif"):
-    """Merge accepted chain/domain CIF files into one complex CIF.
-
-    cif_key 决定每条记录取哪个 CIF（仅对 domain_chain 生效）：
-      - "fitted_cif"           域链含其全部已接受域           -> assembled_complex_all.cif
-      - "fitted_cif_filtered"  域链仅含 cc>=complex_min_cc 的域 -> assembled_complex.cif
-    整链 / 复合物记录不做域级过滤，两个文件都用其 fitted_cif；
-    域链过滤版为 None（所有域均低于阈值）时，该链不进入复合物。
-
-    Args:
-        accepted_chains: list of dicts (type, chain_id, fitted_cif,
-                         fitted_cif_filtered, fitting_order ...)
-        output_dir: directory for output
-        cif_key: "fitted_cif" 或 "fitted_cif_filtered"
-
-    Returns:
-        (path to complex CIF, remap_log)；没有组件时不写出文件并返回 (None, remap_log)。
-    """
     os.makedirs(output_dir, exist_ok=True)
     remap_log = []
     try:
@@ -93,7 +75,6 @@ def build_complex(accepted_chains, output_dir, cif_key="fitted_cif",
 
         out = os.path.join(output_dir, out_name)
         if added == 0:
-            # 空结构文件对下游没有意义：不写出，并清掉上一轮同名结果。
             if os.path.exists(out):
                 os.remove(out)
             log.info("No component for %s; file not written", out_name)

@@ -18,11 +18,8 @@ log = logging.getLogger(__name__)
 
 
 # ===========================================================================
-# Euler 旋转矩阵的解析导数（与 scipy 的 from_euler("xyz", ...) 约定一致）
 # ---------------------------------------------------------------------------
-# 实测确认（scipy 1.10.1）：from_euler("xyz",[a,b,c]).as_matrix()
 #                       == Rz(c) @ Ry(b) @ Rx(a)   （maxdiff 2.2e-16）
-# 因此 dR/dθ 可按乘积法则直接给出，与矩阵中心差分残差 ~1e-10（差分噪声量级）。
 # ===========================================================================
 def _rot_x(t):
     c, s = np.cos(t), np.sin(t)
@@ -55,7 +52,6 @@ def _drot_z(t):
 
 
 def rotation_derivatives(theta):
-    """返回 (dR/dα, dR/dβ, dR/dγ)，对应 Rotation.from_euler("xyz", theta)。"""
     a, b, c = float(theta[0]), float(theta[1]), float(theta[2])
     Rz, Ry, Rx = _rot_z(c), _rot_y(b), _rot_x(a)
     return (Rz @ Ry @ _drot_x(a),
@@ -123,7 +119,6 @@ class DensityMap:
         self.data = self.data.astype(np.float32)
         if contour:
             self.data[self.data < contour] = 0.0
-        # 梯度场惰性计算（每个实例一次）；192^3 约 85 MB，400^3 约 768 MB
         self._grad = None
 
     def get_density_at_position(self, pos):
@@ -135,11 +130,6 @@ class DensityMap:
                                    mode="nearest", cval=0.0).astype(np.float32)
 
     def _gradient_fields(self):
-        """密度梯度场 (∂ρ/∂x, ∂ρ/∂y, ∂ρ/∂z)，**每个实例惰性计算一次**。
-
-        data 的轴序是 (nz, ny, nx)，所以按轴给 spacing：
-        轴 0/1/2 分别对应 z/y/x 方向，据此得到 per-Å 的偏导。
-        """
         if self._grad is None:
             gz, gy, gx = np.gradient(self.data, self.voxel_size[2],
                                      self.voxel_size[1], self.voxel_size[0])
@@ -147,11 +137,6 @@ class DensityMap:
         return self._grad
 
     def gradient_at_positions(self, pos):
-        """在原子位置插值出密度梯度，返回 (N, 3) 的 (gx, gy, gz)。
-
-        逐分量调用 map_coordinates：scipy 1.10.1 的 map_coordinates 不支持
-        "向量值一次插值"（传 (3, nz, ny, nx) + 4 行坐标的通道技巧可用但实测慢 2.1×）。
-        """
         gx, gy, gz = self._gradient_fields()
         vc = ((pos - self.origin) / self.voxel_size)[:, [2, 1, 0]]
         out = np.empty((len(pos), 3), dtype=np.float32)
@@ -163,25 +148,15 @@ class DensityMap:
         return out
 
 
-# 每个进程保留的 DensityMap 上限。一次 local_optimize 会建 7 个实例
-# （6 个拷贝 worker + 父进程精修），每个都要重读整张图；梯度场随实例一起留下，
-# 所以第二次起连 np.gradient 也省掉。留 2 条是给"掩码前后换图"的切换瞬间做缓冲，
-# 避免新旧图交替时反复淘汰重载。上限按**进程**计，最坏 2 × (data + 3 个梯度场)。
 DENSITY_MAP_CACHE_SIZE = 2
 
 
 @lru_cache(maxsize=DENSITY_MAP_CACHE_SIZE)
 def _load_density_map(mrc_file, _size, _mtime_ns, contour):
-    """按文件指纹复用的 DensityMap（进程内 LRU）。
-
-    `_size` / `_mtime_ns` 只参与缓存 key：同名文件被覆盖时指纹变化，自然换新实例。
-    返回的实例在 fit 期间**只读**（fit 只改结构坐标），不得原地修改其 data。
-    """
     return DensityMap(mrc_file, contour if contour else None)
 
 
 def _density_map(mrc_file, contour):
-    """取（可能命中缓存的）DensityMap；stat 失败时退回直接构造。"""
     try:
         stat = os.stat(str(mrc_file))
     except OSError:
@@ -197,12 +172,9 @@ class DensityFitter:
         self.structure = structure
         self.mrc = dmap
         self.best_score = -np.inf
-        # 最佳状态只存 6 个位姿参数；fit() 结束时对原始坐标重放一次变换。
-        # 旧实现每次改进都 copy.deepcopy(atoms) 两遍，实测占 fit 总耗时约 76%。
         self.best_params = None
         self.no_improve = 0
         self.patience = 400
-        # fit() 期间结构只读，坐标与旋转中心只取一次（旧实现每轮各取一次）
         self._coords = None
         self._center = None
 
@@ -248,9 +220,6 @@ class DensityFitter:
             if motion < 0.25 * expected:
                 step_size *= 0.5
             else:
-                # 有进展则加速。这里原本写 min(step_size * 1.2, step_size * 2)，
-                # 但 1.2 < 2 恒成立，等价于直接乘 1.2 —— 保留既有行为（无上界），
-                # 不是经过验证的算法设计。
                 step_size *= 1.2
 
         if self.best_params is not None:
@@ -260,10 +229,6 @@ class DensityFitter:
         return self.best_score
 
     def _pose(self, params, center):
-        """位姿参数 -> (原子坐标, R)。
-
-        fit() 期间结构只读，坐标与旋转中心缓存在实例上；独立调用时惰性取。
-        """
         if self._coords is None:
             self._coords = self.structure.get_coordinates()
             self._center = np.mean(self._coords, axis=0)
@@ -281,24 +246,13 @@ class DensityFitter:
             self.no_improve += 1
 
     def _trans_grad(self, params, center):
-        """∂φ/∂t = mean_i ∇ρ(r_i)：在原子位置插值密度梯度后取均值。
-
-        旧实现用全原子中心有限差分（每个方向 ±eps，共 6 次插值）估计同一量；
-        改后 1 次插值即得三个分量。
-        """
         tr, _R = self._pose(params, center)
         return self.mrc.gradient_at_positions(tr).mean(axis=0)
 
     def _rot_grad(self, params, center):
-        """解析 Euler 梯度：∂φ/∂θ_j = mean_i ∇ρ(r_i) · [(∂R/∂θ_j)(x_i − c)]。
-
-        力臂用原始坐标 q = x − c（平移 t 不进入旋转梯度）。**不用 torque**：
-        torque 是 axis-angle 意义下的旋转方向，与 Euler 参数空间不对应，
-        实测在复合姿态下方向余弦可低至 −0.05。
-        """
         tr, _R = self._pose(params, center)
         g = self.mrc.gradient_at_positions(tr)              # (N, 3)
-        q = self._coords - center                           # (N, 3) 原始力臂
+        q = self._coords - center
         out = np.empty(3, dtype=np.float64)
         for j, dR in enumerate(rotation_derivatives(params[:3])):
             out[j] = np.mean(np.sum(g * (q @ dR.T), axis=1))
@@ -325,20 +279,6 @@ def local_optimize(structure_file, density_mrc, output_file,
                    resolution, contour=0.0, max_iterations=2000,
                    initial_step_size=1.25, initial_cc=None,
                    context=None):
-    """Local optimization.
-
-    1. Run multi-copy density gradient (parallel via `context` when it has >1 worker)
-    2. Select highest-CC candidate (unmodified original + copies)
-    3. Fine density optimization (fewer steps) on the selected best
-    4. Revert if fine drops
-
-    优化只能改善、不得让结果更差：未改动的原始位姿始终是一等候选，
-    所以 6 条轨迹全部不如起点时会直接返回原结构。
-
-    initial_cc: CC already computed during PARENet fitting (reuse, no recompute).
-                If None it is computed here.
-    Returns (success, output_path, final_cc).
-    """
     try:
         if initial_cc is None:
             initial_cc = calculate_cc_mask(density_mrc, structure_file, resolution, contour)
@@ -372,10 +312,8 @@ def local_optimize(structure_file, density_mrc, output_file,
         candidates.extend({"cc": r["cc"], "pdb": r["pdb"],
                            "source": "density"} for r in results)
 
-        # ---- 选 CC 最高的候选（含未改动的原始位姿）----
         best = max(candidates, key=lambda c: c["cc"])
 
-        # ---- 精修：对选中的最佳候选做更少步数的密度优化 ----
         bs = StructureData(best["pdb"])
         dmap3 = _density_map(density_mrc, contour)
         DensityFitter(bs, dmap3).fit(max_iter=250, step_size=0.5)
@@ -384,7 +322,6 @@ def local_optimize(structure_file, density_mrc, output_file,
         fine_cc = calculate_cc_mask(density_mrc, fine_pdb, resolution, contour)
         log.info("fine: %.4f -> %.4f", best["cc"], fine_cc)
 
-        # ---- 精修未改善则回退 ----
         if fine_cc >= best["cc"]:
             final_src, final_cc = fine_pdb, fine_cc
         else:
@@ -417,14 +354,12 @@ if __name__ == "__main__":
     p.add_argument("--max_iterations", type=int, default=2000)
     p.add_argument("--initial_step_size", type=float, default=1.25)
     p.add_argument("--num_processes", type=int, default=1,
-                   help="并行副本数（1 = 串行；>1 走 ExecutionContext 共享池）")
+                   help='Parallel replicas (1 = serial; >1 uses the shared ExecutionContext pool)')
     p.add_argument("--pool_start_method", default=None,
-                   help="进程池启动方式：默认 None = 系统默认（Linux 为 fork）")
+                   help='Process-pool start method (default None = system default, fork on Linux)')
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    # P3 之后并行度改由 ExecutionContext 表达：此处是本模块的独立入口，自己建上下文并释放。
-    # worker 函数 `_density_copy_worker` 是模块级可序列化对象，满足共享池的契约。
     context = ExecutionContext(pool_workers=a.num_processes,
                                start_method=a.pool_start_method)
     try:

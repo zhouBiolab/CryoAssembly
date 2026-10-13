@@ -1,45 +1,27 @@
 # -*- coding: utf-8 -*-
-"""组装优化辅助：参数集中 + clash/CA helper + 轮末候选选择。供 orchestrator/unified_queue 复用。
-
-- AssemblyOptConfig：组装可调参数，集中一处调参。
-- ca_count / ca_overlap：CA 原子数 / 链间 CA 重叠比（clash，复用 check_clash 的 numpy 实现）。
-- select_round_end_candidate：轮末无人达标时选 cc 最高者；若有候选 cc 与最高相差 ≤ ca_margin，
-  则在这批近似候选里偏向 CA 原子数更多的一个（只接受一个）。
-"""
 import os
 import sys
 from dataclasses import dataclass
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))          # demo_reg 根（check_clash 在此）
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 
 @dataclass
 class AssemblyOptConfig:
-    """组装可调参数（集中调参处）。"""
-    chain_similar_relax: float = 0.03      # 同源组已有接受时，链阈放宽
-    domain_similar_relax: float = 0.025    # 相似域已接受时，域阈放宽
-    clash_overlap_thr: float = 0.10        # CA 重叠比 > 此值算 clash（保 CA 多者）
+    chain_similar_relax: float = 0.03
+    domain_similar_relax: float = 0.025
+    clash_overlap_thr: float = 0.10
 
 
-HIGH_CC_TIER: float = 0.55     # 同源组最小 cc 达到此值 -> 升到高 CC 档
-HIGH_CC_RELAX: float = 0.05    # 高 CC 档的容许值（档位 - 容许 = 有效阈值）
+HIGH_CC_TIER: float = 0.55
+HIGH_CC_RELAX: float = 0.05
 
 
 def homolog_threshold(base, relax, accepted_ccs, *, low_band=True):
-    """同源组已接受时，按组内【最小】cc 分档给出有效阈值。
-
-    base=设定阈值(0.45) relax=容许值(0.03)：
-      - 组内还没接受过          -> base                （不放宽）
-      - min cc >= 0.55          -> 0.55 - 0.05 = 0.50  （高 CC 档；档位封顶不再上升）
-      - min cc >= base + relax  -> base                （正常档；不放宽）
-      - min cc <  base + relax  -> min cc - relax      （弱于设定值 -> 按最小 cc 放宽）
-
-    low_band=False：跳过下面两档，只保留高 CC 档，其余仍走 base - relax
-    （域侧沿用旧行为，仅补上高 CC 档）。
-    """
+    'Select the fitting threshold for a homologous group.'
     if not accepted_ccs:
         return base
     a = min(accepted_ccs)
@@ -53,7 +35,6 @@ def homolog_threshold(base, relax, accepted_ccs, *, low_band=True):
 
 
 def ca_count(pdb):
-    """PDB 里 CA/P 原子数（残基数近似）。"""
     n = 0
     try:
         with open(pdb) as f:
@@ -66,18 +47,11 @@ def ca_count(pdb):
 
 
 def ca_overlap(pdb_a, pdb_b):
-    """两结构 CA 重叠比（复用 check_clash 的 numpy 实现，惰性 import 避免引入 torch）。"""
     import check_clash
     return check_clash.calculate_overlap_ratio_numpy(pdb_a, pdb_b, clash_distance=3.0)
 
 
 def select_round_end_candidate(candidates, ca_margin):
-    """轮末候选选择（单选）。
-
-    candidates: [{"cc": float, "pdb": pdb_path, "drec": ..., "key": ...}, ...]。
-    规则：取 cc 最高者 best；在与 best 的 cc 相差 ≤ ca_margin 的近似候选里，选 CA 原子数
-    最多的一个（cc 接近时偏向更完整的结构）。返回单个 candidate；candidates 为空返回 None。
-    """
     if not candidates:
         return None
     best_cc = max(c["cc"] for c in candidates)

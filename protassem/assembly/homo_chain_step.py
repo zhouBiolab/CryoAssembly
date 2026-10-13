@@ -1,12 +1,3 @@
-"""Step 5 门控：同源链精修（homo-chain-refine）。
-
-在 Step4（同源域精修）之后由 orchestrator 调用。门控：
-  - 开关 self.homo_chain_refine 为真才执行；
-  - 是否存在同源链 / 同源组有好有差 的判定，交给 run_homo_chain_refine 内部完成
-    （不满足则返回 None，主输出不变）。
-
-复用 protassem.assembly.homo_chain_refine.run_homo_chain_refine。
-"""
 import os
 import logging
 
@@ -27,7 +18,6 @@ def maybe_homo_refine(orch, input_complex):
     log.info("Step 5: homologous-chain refine")
     log.info("=" * 60)
 
-    # 域范围（用于域级好/差判定）：orch.domain_adjacency[cid] = (ranges, adj)
     domain_ranges = {}
     for cid, val in getattr(orch, "domain_adjacency", {}).items():
         ranges = val[0] if isinstance(val, (tuple, list)) else None

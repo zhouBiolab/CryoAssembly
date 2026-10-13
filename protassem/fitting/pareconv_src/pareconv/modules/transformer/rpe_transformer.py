@@ -101,39 +101,21 @@ class RPEMultiHeadAttention(nn.Module):
         self.dropout = build_dropout_layer(dropout)
 
     def compute_distance_mask(self, points, layer_idx, total_layers):
-        """
-        计算渐进式距离掩码 - 基于最近邻比例
-        Args:
-            points: torch.Tensor (B, N, 3) - 3D点坐标
-            layer_idx: int - 当前层索引 (0-based)
-            total_layers: int - 总层数
-        Returns:
-            mask: torch.Tensor (B, N, N) - 距离掩码
-        """
         B, N, _ = points.shape
 
-        # 计算点之间的欧氏距离
         # (B, N, 1, 3) - (B, 1, N, 3) = (B, N, N, 3)
         diff = points.unsqueeze(2) - points.unsqueeze(1)
         distances = torch.norm(diff, dim=-1)  # (B, N, N)
 
-        # 计算当前层应该保留的邻居数量
-        # layer_idx + 1 因为我们想要 1/3, 2/3, 3/3 而不是 0/3, 1/3, 2/3
         keep_ratio = (layer_idx + 4) / (total_layers+3)
         #keep_ratio = 1#(layer_idx + 4) / (total_layers+3)
         #print("keep_ratio",keep_ratio)
-        k = max(1, int(N * keep_ratio))  # 至少保留1个邻居（自己）
+        k = max(1, int(N * keep_ratio))
         #k = N
-        # 对每个点，找到最近的k个邻居
-        # 注意：distances矩阵的对角线是0（点到自己的距离）
-        # topk返回的是最小的k个值（包括自己）
         _, indices = torch.topk(distances, k, dim=-1, largest=False)  # (B, N, k)
 
-        # 创建掩码
         mask = torch.zeros(B, N, N, dtype=torch.bool, device=points.device)
 
-        # 使用scatter_来设置mask
-        # 为每个点(batch中的每个样本的每个点)设置其k个最近邻为True
         batch_indices = torch.arange(B, device=points.device).view(B, 1, 1).expand(B, N, k)
         row_indices = torch.arange(N, device=points.device).view(1, N, 1).expand(B, N, k)
 
@@ -144,14 +126,6 @@ class RPEMultiHeadAttention(nn.Module):
     def forward(self, input_q, input_k, input_v, embed_qk, points=None,
                 layer_idx=None, total_layers=None, key_weights=None,
                 key_masks=None, attention_factors=None):
-        """
-        带渐进式注意力的前向传播
-
-        额外参数:
-            points: torch.Tensor (B, N, 3) - 用于计算距离掩码的3D点坐标
-            layer_idx: int - 当前层索引 (0-based)
-            total_layers: int - 总层数
-        """
         q = rearrange(self.proj_q(input_q), 'b n (h c) -> b h n c', h=self.num_heads)
         k = rearrange(self.proj_k(input_k), 'b m (h c) -> b h m c', h=self.num_heads)
         v = rearrange(self.proj_v(input_v), 'b m (h c) -> b h m c', h=self.num_heads)
@@ -161,10 +135,8 @@ class RPEMultiHeadAttention(nn.Module):
         attention_scores_e = torch.einsum('bhnc,bhmc->bhnm', q, k)
         attention_scores = (attention_scores_e + attention_scores_p) / self.d_model_per_head ** 0.5
         #print("attention_scores",attention_scores.shape)
-        # 应用渐进式距离掩码
         if points is not None and layer_idx is not None and total_layers is not None:
             distance_mask = self.compute_distance_mask(points, layer_idx, total_layers)  # (B, N, N)
-            # 将False位置设为-inf，这样softmax后会变成0
             attention_scores = attention_scores.masked_fill(~distance_mask.unsqueeze(1), float('-inf'))
 
         if attention_factors is not None:

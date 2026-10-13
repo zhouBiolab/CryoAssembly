@@ -16,21 +16,21 @@ checkpoints/
 *.npz
 *.mrc
 
-# 真实测试数据与运行产物（只入库生成器、输入清单与精简报告）
+# Private test data and runtime outputs
 test/
 
 .vscode/
 .idea/
 .DS_Store
 
-# compiled extensions / build artifacts (pareconv 等需各机器重编译，源码入库但产物不入库)
+# Compiled extensions and build artifacts
 *.so
 build/
 dist/
 *.egg-info/
 
 # ---------------------------------------------------------------------------
-# 开发/测试资产：仅在开发服务器保留，不随仓库发布
+# Private development and test assets
 # ---------------------------------------------------------------------------
 tests/
 tools/
@@ -39,8 +39,8 @@ init_modeling.py
 geo_test.py
 
 # ---------------------------------------------------------------------------
-# 内部开发文档（任务卡/审计/架构台账）：不随仓库发布
-# 面向用户的文档是 README.md（英文，默认展示）/ README.zh-CN.md（中文）/ ALGORITHM.md
+# Internal development documents
+# Public documentation: README.md, README.zh-CN.md and ALGORITHM.md
 # ---------------------------------------------------------------------------
 PROJECT_ARCHITECTURE.md
 ENGINEERING_HARDENING_PLAN.md
@@ -51,3 +51,13 @@ STEP4_ASSEMBLY_NOTES.md
 TASK_INDEX.md
 SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
 组装算法逻辑.md
+
+/_backup*/
+
+/output/
+
+/protassem/fitting/pareconv_src/pareconv/modules/ops/test.py
+
+/protassem/fitting/pareconv_src/pareconv/modules/ops/test_gird.py
+
+/tests/test_low_memory_cli.py

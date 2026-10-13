@@ -1,28 +1,13 @@
-"""按字节计费的有界 LRU 缓存（任务卡 T05/T07 与老卡收口 P4 共用）。
-
-设计约定
---------
-- 容量以**字节**计（不是条目数）；插入时用调用方给的 `size_of(value)` 计费。
-- `capacity_bytes <= 0` 表示**关闭**：`get()` 恒 miss、`put()` 不存；调用方代码不需要分叉。
-- 单条体积超过容量时，`put()` 返回 False（调用方正常使用该值，只是不缓存）。
-- 不做并发保护：使用者都是**进程内**缓存（PARENet 常驻服务进程、评分 worker 进程），
-  并行 worker 不共享缓存。这是**边界事实**，不是可以靠加锁掩盖的设计；
-  若将来跨进程共享，应在调用方引入显式同步或改为进程本地缓存。
-- 值必须视为**只读**：`get()` 返回同一个对象，缓存不做深拷贝；调用方不得原地修改。
-
-一行一个操作，参数显式传递，不新增隐式全局状态。
-"""
 
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 
-ENTRY_OVERHEAD_BYTES = 1024     # 每个条目的对象/字典开销（保守计入，避免账面偏乐观）
+ENTRY_OVERHEAD_BYTES = 1024
 
 
 @dataclass
 class CacheStats:
-    """缓存计数（累计值）；`as_dict()` 可直接写进运行记录。"""
 
     name: str
     capacity_bytes: int
@@ -55,13 +40,12 @@ class _Entry:
 
 
 class ByteLruCache:
-    """字节计费的 LRU；`size_of(value)` 必须返回该条目的字节数。"""
 
     def __init__(self, capacity_bytes, size_of, name="cache"):
         if capacity_bytes < 0:
-            raise ValueError("capacity_bytes 不能为负：%r" % (capacity_bytes,))
+            raise ValueError('capacity_bytes must be nonnegative: %r' % (capacity_bytes,))
         if not callable(size_of):
-            raise ValueError("size_of 必须是可调用对象")
+            raise ValueError('size_of must be callable')
         self.capacity_bytes = int(capacity_bytes)
         self.size_of = size_of
         self.name = name
@@ -81,7 +65,6 @@ class ByteLruCache:
         return key in self._entries
 
     def get(self, key):
-        """命中返回条目并刷新 LRU 顺序；未命中返回 None。"""
         if key is None or not self.enabled:
             self.stats.misses += 1
             return None
@@ -94,9 +77,8 @@ class ByteLruCache:
         return entry.value
 
     def put(self, key, value):
-        """插入条目；返回是否真的存下（关闭/超容量/超预算时为 False）。"""
         if key is None:
-            raise ValueError("缓存 key 不能为 None")
+            raise ValueError('Cache key must not be None')
         if not self.enabled:
             self.stats.disabled_puts += 1
             return False
@@ -132,10 +114,6 @@ class ByteLruCache:
 
 
 def object_bytes(value):
-    """递归估算对象的字节数（numpy / torch / 容器 / 标量）。
-
-    缓存计费只需要**保守且稳定**的估算；不追求与进程 RSS 一致。
-    """
     if value is None:
         return 0
     if isinstance(value, (bytes, bytearray)):

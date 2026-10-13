@@ -49,12 +49,6 @@ def setup_logging(output_dir, log_file=None):
 
 
 def _validate_inputs(density_mrc, structure_files, resolution, contour, voxel_size):
-    """校验流水线输入；只在此边界检查，内部函数不再重复校验。
-
-    contour 必须是有限数值：core/scoring.calculate_cc_mask 直接执行
-    ``exp_map > contour``，None 会在评分阶段以 TypeError 暴露。采样器的
-    3*sigma 兜底只服务显式传入 None 的直接调用方，不属于本入口契约。
-    """
     if not os.path.isfile(density_mrc):
         raise FileNotFoundError("density map not found: %s" % density_mrc)
     if not str(density_mrc).lower().endswith((".mrc", ".map")):
@@ -74,17 +68,10 @@ def _validate_inputs(density_mrc, structure_files, resolution, contour, voxel_si
 
 
 def _normalize_density(density_mrc, output_dir):
-    """把实验密度图的 header 原点化成与读法约定无关的形式，返回下游应使用的路径。
-
-    输入已是规范形式（``nstart`` 全为 0）时原样返回，不复制文件。口径、为什么
-    统一在文件侧而不改 `Sample` 或 `core.scoring`、以及"origin 停在显示位置"
-    这条规则的理由与残余假设，见 `protassem.core.mrc_origin`。
-    """
     result = normalize_density_map(
         density_mrc,
         os.path.join(output_dir, "density", os.path.basename(density_mrc)))
     if result.path != density_mrc:
-        # 只报事实：Sample 的锚点从旧值移到显示原点，nstart 归零；图的渲染位置不变
         log.info("Density origin normalized: sample anchor %s -> %s, "
                  "nstart %s -> 0 (display origin %s unchanged)",
                  tuple(round(float(v), 3) for v in result.sample_anchor),
@@ -97,31 +84,7 @@ def _normalize_density(density_mrc, output_dir):
 def run_pipeline(density_mrc, structure_files, resolution, contour,
                  output_dir=None, voxel_size=2.0, log_file=None,
                  assembly_kwargs=None, runtime_config=None):
-    """Run the full three-step pipeline.
-
-    Args:
-        density_mrc: path to experimental density map (.mrc). Its header origin is
-            normalized (``nstart`` folded into ``origin``) before Step 1; when that
-            changes anything, the copy under ``<output_dir>/density/`` is used from
-            then on and the original file is left untouched.
-        structure_files: list of structure file paths (.pdb/.cif)
-        resolution: map resolution in angstroms
-        contour: density contour level
-        output_dir: output directory (default: <mrc_dir>/output)
-        voxel_size: sampling voxel size (default 2.0)
-        log_file: True for auto log file, or str path, or None
-        runtime_config: RuntimeConfig（阶段二）；提供时记录实测生效线程数
-        assembly_kwargs: dict of thresholds passed to AssemblyOrchestrator
-            chain_threshold, initial_domain_threshold,
-            min_domain_threshold, similarity_threshold
-
-    Returns:
-        dict with target_txt, source_txts, output_dir, complex_cif
-
-    Raises:
-        FileNotFoundError: density map or a structure file does not exist.
-        ValueError: no structure files, or resolution/contour/voxel_size invalid.
-    """
+    'Prepare inputs, fit components and assemble the complex.'
     _validate_inputs(density_mrc, structure_files, resolution, contour, voxel_size)
 
     if output_dir is None:
@@ -131,9 +94,7 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
     setup_logging(output_dir, log_file)
 
     if runtime_config is not None:
-        log.info("Runtime config: blas_threads=%d seed=%d geometry_cache_mb=%d "
-                 "encoding_cache_mb=%d inference_mode=%s allow_tf32=%s(生效 %s) "
-                 "hypothesis_chunk=%d tail_pipeline=%s score_cache_mb=%d tm_cache=%s",
+        log.info('Runtime config: blas_threads=%d seed=%d geometry_cache_mb=%d encoding_cache_mb=%d inference_mode=%s allow_tf32=%s(effective %s) hypothesis_chunk=%d tail_pipeline=%s score_cache_mb=%d tm_cache=%s',
                  runtime_config.blas_threads, runtime_config.seed,
                  runtime_config.geometry_cache_mb, runtime_config.encoding_cache_mb,
                  runtime_config.inference_mode,
@@ -142,8 +103,6 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
                  runtime_config.score_cache_mb, runtime_config.tm_cache)
         log.info("Effective threads: %s",
                  runtime_config.describe_effective_threads())
-        # T05–T09：缓存容量、推理路径、TF32 策略、假设分块与尾部流水线透传给 PARENet 常驻服务进程
-        # （必须在服务启动前设定；服务已在运行时只告警不重启）
         from protassem.fitting.parenet_client import (configure_allow_tf32,
                                                      configure_encoding_cache,
                                                      configure_geometry_cache,
@@ -156,13 +115,10 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
         configure_inference_mode(runtime_config.inference_mode)
         configure_hypothesis_chunk(runtime_config.hypothesis_chunk)
         configure_tail_pipeline(runtime_config.tail_pipeline)
-        # 老卡收口（O6 复查项）：父进程随机源由配置固定 → 回退型局部优化不再随运行漂移
         log.info("Parent RNG seeded: %s", apply_seed(runtime_config.seed))
-        # 老卡收口 P4：评分缓存预算（密度上下文 + 结构坐标；worker 通过环境变量继承）
         from protassem.core.scoring import apply_score_cache
         apply_score_cache(runtime_config.score_cache_mb)
         log.info("Score cache budget: %d MiB", runtime_config.score_cache_mb)
-        # 老卡收口 P5：TM 缓存（SQLite；父进程查询/写入，worker 只跑 USalign）
         from protassem.core.similarity import configure_tm_cache
         configure_tm_cache(runtime_config.tm_cache)
         log.info("TM cache mode: %s", runtime_config.tm_cache)
@@ -171,8 +127,6 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
     log.info("Structures  : %d files", len(structure_files))
     log.info("Resolution  : %s, Contour: %s, Voxel: %.2f", resolution, contour, voxel_size)
 
-    # Step 0 之前的唯一 MRC 处理：把 nstart 折进 origin，使采样端与评分端同框。
-    # 必须晚于 _validate_inputs / os.makedirs（非法输入不建输出目录），早于 Step 1/2/3。
     density_mrc = _normalize_density(density_mrc, output_dir)
 
     # ---- Step 0: Standardize input structures ----

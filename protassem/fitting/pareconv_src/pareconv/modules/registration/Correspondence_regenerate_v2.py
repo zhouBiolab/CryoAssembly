@@ -10,18 +10,6 @@ import torch
 
 
 def rigid_transform_3d(src_points, tgt_points, weights=None):
-    """
-    通过奇异值分解计算两组对应点之间的刚体变换
-
-    Args:
-        src_points: [bs, N, 3] 源点云
-        tgt_points: [bs, N, 3] 目标点云
-        weights: [bs, N] 可选的权重，如果为None则使用等权重
-
-    Returns:
-        transform: [bs, 4, 4] 或 [4, 4] 刚体变换矩阵
-    """
-    # 处理维度
     if src_points.dim() == 2:
         src_points = src_points.unsqueeze(0)  # [N, 3] -> [1, N, 3]
         tgt_points = tgt_points.unsqueeze(0)
@@ -32,42 +20,32 @@ def rigid_transform_3d(src_points, tgt_points, weights=None):
     bs, num_points, _ = src_points.shape
     device = src_points.device
 
-    # 如果没有提供权重，使用等权重
     if weights is None:
         weights = torch.ones(bs, num_points, device=device)
     elif weights.dim() == 1:
         weights = weights.unsqueeze(0)  # [N] -> [1, N]
 
-    # 归一化权重
     weights = weights / (torch.sum(weights, dim=1, keepdim=True) + 1e-8)
 
-    # 计算加权重心
     src_centroid = torch.sum(src_points * weights.unsqueeze(-1), dim=1, keepdim=True)  # [bs, 1, 3]
     tgt_centroid = torch.sum(tgt_points * weights.unsqueeze(-1), dim=1, keepdim=True)  # [bs, 1, 3]
 
-    # 去中心化
     src_centered = src_points - src_centroid  # [bs, N, 3]
     tgt_centered = tgt_points - tgt_centroid  # [bs, N, 3]
 
-    # 构建协方差矩阵 H = sum(weight_i * src_i * tgt_i^T)
     # H: [bs, 3, 3]
     weighted_src = src_centered * weights.unsqueeze(-1)  # [bs, N, 3]
     H = torch.bmm(weighted_src.transpose(1, 2), tgt_centered)  # [bs, 3, 3]
 
-    # 奇异值分解
     U, S, Vt = torch.linalg.svd(H)  # U: [bs, 3, 3], S: [bs, 3], Vt: [bs, 3, 3]
     V = Vt.transpose(-1, -2)  # [bs, 3, 3]
 
-    # 计算旋转矩阵
     R = torch.bmm(V, U.transpose(-1, -2))  # [bs, 3, 3]
 
-    # 确保旋转矩阵的行列式为1（右手坐标系）
     det_R = torch.det(R)  # [bs]
 
-    # 如果行列式为-1，需要修正
     correction_needed = det_R < 0
     if correction_needed.any():
-        # 修正最后一列
         V_corrected = V.clone()
         V_corrected[correction_needed, :, -1] *= -1
         R[correction_needed] = torch.bmm(
@@ -75,11 +53,9 @@ def rigid_transform_3d(src_points, tgt_points, weights=None):
             U[correction_needed].transpose(-1, -2)
         )
 
-    # 计算平移向量
     t = tgt_centroid - torch.bmm(R, src_centroid.transpose(-1, -2)).transpose(-1, -2)  # [bs, 1, 3]
     t = t.squeeze(1)  # [bs, 3]
 
-    # 构建4x4变换矩阵
     transform = torch.eye(4, device=device).unsqueeze(0).repeat(bs, 1, 1)  # [bs, 4, 4]
     transform[:, :3, :3] = R
     transform[:, :3, 3] = t
@@ -310,13 +286,13 @@ class Regenerator():
 
             visualization.draw_registration_corr2(src, tgt, src_key0, tgt_key0,
                                                   np.linalg.inv(self.gt_trans[0].cpu().numpy()))
-            print("重新匹配")
+            print('Rematch')
             visualization.draw_registration_corr2(src, tgt, src_key, tgt_key,
                                                   np.linalg.inv(self.gt_trans[0].cpu().numpy()))
-            print("局部过滤")
+            print('Local filtering')
             visualization.draw_registration_corr2(src, tgt, src_key1, tgt_key1,
                                                   np.linalg.inv(self.gt_trans[0].cpu().numpy()))
-            print("全局过滤")
+            print('Global filtering')
             visualization.draw_registration_corr2(src, tgt, src_key2, tgt_key2,
                                                   np.linalg.inv(self.gt_trans[0].cpu().numpy()))
 
@@ -333,7 +309,6 @@ class Regenerator():
         return:
             - selected_points: [bs, num_corr, num_knn, num_channel]
         """
-        # 速度更快，也有全局信息
         # [bs, corr_num, 3]
         bs, key_num, knn_num, _ = src_knn_corr.shape
         diff_src_key = src_key_corr[:, :, None, :] - src_knn_corr  # [bs, key_num, knn, 3]
@@ -352,7 +327,7 @@ class Regenerator():
         match_mask_two = match_mask[:, :, :, None].expand(-1, -1, -1, knn_num) * match_mask[:, :, None, :].expand(-1, -1, knn_num, -1)
         two_knn_point_diff = (cross_dist < self.d_thre/2) * match_mask_two   # [bs, key_num, knn, knn]
         two_knn_point_diff_sum = two_knn_point_diff.sum(dim=-1)  # [bs, key_num, knn]
-        good_match_num = match_mask.sum(-1)  # 这里可以输入数量就不用计算了，可以提速 # [bs, key_num]
+        good_match_num = match_mask.sum(-1)
         # print(good_match_num.shape, two_knn_point_diff_sum.shape, good_match_num[:, :, :, None].expand(-1, -1, -1, knn_num).shape)
         two_knn_point_diff_mask = two_knn_point_diff_sum >= good_match_num[:, :, None].expand(-1, -1, knn_num) * 0.3
 
@@ -365,7 +340,6 @@ class Regenerator():
         return corr_mask, key_mask_false
 
     def global_spatial_fitering_topk_two(self, src_knn_corr, tgt_knn_corr):
-        # 有效果
         """
         input:
             - src_key_corr: key points [bs,key_num,3]
@@ -376,7 +350,6 @@ class Regenerator():
             - selected_points: [bs, num_corr, num_knn, num_channel]
         """
         # print(src_knn_corr.shape, mutual_mask.shape)
-        # 速度更快，也有全局信息
         # [bs, corr_num, 3]
         bs, knn_num, _ = src_knn_corr.shape
 
@@ -386,8 +359,7 @@ class Regenerator():
         local_measure = (cross_dist < 0.1).float()
         SC2_measure = torch.matmul(local_measure, local_measure) * local_measure
         SC2_measure_sum = torch.sum(SC2_measure, dim=-1)
-        # _, corr_idx = torch.topk(SC2_measure_sum, largest=True, dim=-1, k=int(knn_num * 0.3))  # 筛选出corr_idx
-        _, corr_idx = torch.topk(SC2_measure_sum, largest=True, dim=-1, k=int(knn_num * 0.5))  # 筛选出corr_idx
+        _, corr_idx = torch.topk(SC2_measure_sum, largest=True, dim=-1, k=int(knn_num * 0.5))
 
         src_knn_corr_s = src_knn_corr[:, corr_idx[0], :]
         tgt_knn_corr_s = tgt_knn_corr[:, corr_idx[0], :]
@@ -404,7 +376,7 @@ class Regenerator():
         local_measure = (cross_dist < 0.1).float()
         SC2_measure = torch.matmul(local_measure, local_measure) * local_measure
         SC2_measure_sum = torch.sum(SC2_measure, dim=-1)
-        _, corr_idx_idx = torch.topk(SC2_measure_sum, largest=True, dim=-1, k=int(knn_num * 0.2))  # 筛选出corr_idx
+        _, corr_idx_idx = torch.topk(SC2_measure_sum, largest=True, dim=-1, k=int(knn_num * 0.2))
         corr_idx = corr_idx[:, corr_idx_idx[0]]
 
         return corr_idx[0]
@@ -566,7 +538,7 @@ class Regenerator():
         # select reliable seed correspondences
         #################################
         confidence = self.cal_leading_eigenvector(SC_measure, method='power')
-        seeds = self.pick_seeds(src_dist, confidence, R=self.nms_radius, max_num=sampling_num)   # 第重叠的时候 nms_radius应该调小
+        seeds = self.pick_seeds(src_dist, confidence, R=self.nms_radius, max_num=sampling_num)
         src_keypts_best_corr = src_keypts[:, seeds[0]]
         tgt_keypts_best_corr = tgt_keypts[:, seeds[0]]
 
@@ -591,8 +563,8 @@ class Regenerator():
         # knn & regenerate correspondences
         #################################
         # [1,num_seeds,knn_num]
-        self.knn_num = min(knn_num, min(src_point.shape[1], tgt_point.shape[1]))  # knn的近邻点数量
-        self.sampling_num = sampling_num  # knn的近邻点数量
+        self.knn_num = min(knn_num, min(src_point.shape[1], tgt_point.shape[1]))
+        self.sampling_num = sampling_num
 
         # random sampling
         sel_ind = np.random.choice(src_key_corr.shape[1], self.sampling_num)

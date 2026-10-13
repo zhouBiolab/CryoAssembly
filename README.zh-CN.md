@@ -41,9 +41,29 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 
 需要 **Linux x86_64**、NVIDIA GPU、Conda 和兼容的 C/C++ 编译器。已验证的安装基线为 Ubuntu 20.04、GCC/G++ 9.4 和 CUDA 11.3。
 
+从 [GitHub 官方仓库](https://github.com/zhouBiolab/CryoAssembly) 获取源码：
+
 ```bash
 git clone --branch main --single-branch https://github.com/zhouBiolab/CryoAssembly.git
 cd CryoAssembly
+```
+
+<details>
+<summary><strong>通过 GitHub 下载，而不是 Git 克隆？</strong></summary>
+
+在 [GitHub 官方仓库页面](https://github.com/zhouBiolab/CryoAssembly) 选择 **Code → Download ZIP**，然后解压。项目文件夹通常名为 `CryoAssembly-main`：
+
+```bash
+cd CryoAssembly-main
+```
+
+进入同时包含 `install.sh`、`requirements.txt` 和 `main.py` 的目录。如果解压工具额外创建了一层外部文件夹，请进入里面的项目目录。文件夹名称可以不同，安装脚本会根据自身路径定位项目。
+
+</details>
+
+在上述项目目录中安装并激活环境：
+
+```bash
 bash install.sh
 conda activate cryoassembly
 ```
@@ -86,6 +106,41 @@ bash install.sh --help
 使用新环境名，或对已有 Python 3.8.20 和 CUDA 11.3 工具链的环境选择 `--skip-env`。`--verify-only` 核验依赖、导入和算子。
 
 `CONDA_BASE` 选择 Conda 安装位置，`MAX_JOBS` 设置编译进程数，默认为 8。`PIP_INDEX_URL` 和 `PIP_FIND_LINKS` 指定 Python 包镜像或 wheel 缓存。
+
+</details>
+
+<details>
+<summary><strong>依赖包官方下载链接</strong></summary>
+
+`bash install.sh` 会自动下载并安装依赖。需要手动下载时，可以使用以下官方链接。Python wheel 请选择 **Linux x86_64 / CPython 3.8**；版本以 [requirements.txt](requirements.txt) 和 [environment.yml](environment.yml) 为准。
+
+- [Miniconda 官方安装包](https://repo.anaconda.com/miniconda/)。
+- [Python Conda 包](https://anaconda.org/conda-forge/python/files)：选择 **3.8.20** 和 **linux-64**。
+- [NVIDIA CUDA toolkit 包](https://anaconda.org/nvidia/cuda-toolkit/files)：选择 **cuda-11.3.1** 标签中的 **11.3.1**。
+- [NVIDIA nvcc 包](https://anaconda.org/nvidia/cuda-nvcc/files)：选择同一标签中的 **11.3.122**。
+- [PyTorch 官方 cu113 索引](https://download.pytorch.org/whl/cu113/torch/)。
+
+| 包 | 版本 | 官方下载 |
+| :--- | :--- | :--- |
+| `torch` | 1.10.0+cu113 | [Linux / CPython 3.8 wheel](https://download-r2.pytorch.org/whl/cu113/torch-1.10.0%2Bcu113-cp38-cp38-linux_x86_64.whl) |
+| `numpy` | 1.21.5 | [PyPI 下载文件](https://pypi.org/project/numpy/1.21.5/#files) |
+| `scipy` | 1.10.1 | [PyPI 下载文件](https://pypi.org/project/scipy/1.10.1/#files) |
+| `numba` | 0.56.4 | [PyPI 下载文件](https://pypi.org/project/numba/0.56.4/#files) |
+| `llvmlite` | 0.39.1 | [PyPI 下载文件](https://pypi.org/project/llvmlite/0.39.1/#files) |
+| `scikit-learn` | 1.3.2 | [PyPI 下载文件](https://pypi.org/project/scikit-learn/1.3.2/#files) |
+| `biopython` | 1.79 | [PyPI 下载文件](https://pypi.org/project/biopython/1.79/#files) |
+| `mrcfile` | 1.5.3 | [PyPI 下载文件](https://pypi.org/project/mrcfile/1.5.3/#files) |
+| `open3d` | 0.14.1 | [PyPI 下载文件](https://pypi.org/project/open3d/0.14.1/#files) |
+| `easydict` | 1.13 | [PyPI 下载文件](https://pypi.org/project/easydict/1.13/#files) |
+| `tqdm` | 4.65.0 | [PyPI 下载文件](https://pypi.org/project/tqdm/4.65.0/#files) |
+| `threadpoolctl` | 3.5.0 | [PyPI 下载文件](https://pypi.org/project/threadpoolctl/3.5.0/#files) |
+| `einops` | 0.6.1 | [PyPI 下载文件](https://pypi.org/project/einops/0.6.1/#files) |
+| `ipdb` | 0.13.13 | [PyPI 下载文件](https://pypi.org/project/ipdb/0.13.13/#files) |
+| `ipython` | 8.12.3 | [PyPI 下载文件](https://pypi.org/project/ipython/8.12.3/#files) |
+| `ninja` | 1.11.1.4 | [PyPI 下载文件](https://pypi.org/project/ninja/1.11.1.4/#files) |
+| `pip` | 24.3.1 | [PyPI 下载文件](https://pypi.org/project/pip/24.3.1/#files) |
+| `setuptools` | 69.5.1 | [PyPI 下载文件](https://pypi.org/project/setuptools/69.5.1/#files) |
+| `wheel` | 0.45.1 | [PyPI 下载文件](https://pypi.org/project/wheel/0.45.1/#files) |
 
 </details>
 

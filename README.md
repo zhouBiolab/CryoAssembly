@@ -41,9 +41,29 @@ Submit your density map and protein structures through the [**CryoAssembly web s
 
 Use **Linux x86_64**, an NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04, GCC/G++ 9.4 and CUDA 11.3.
 
+Get the source from the [official GitHub repository](https://github.com/zhouBiolab/CryoAssembly):
+
 ```bash
 git clone --branch main --single-branch https://github.com/zhouBiolab/CryoAssembly.git
 cd CryoAssembly
+```
+
+<details>
+<summary><strong>Downloaded from GitHub instead of cloning?</strong></summary>
+
+On the [official repository page](https://github.com/zhouBiolab/CryoAssembly), select **Code → Download ZIP** and extract the archive. The project folder is normally named `CryoAssembly-main`:
+
+```bash
+cd CryoAssembly-main
+```
+
+Enter the directory containing `install.sh`, `requirements.txt` and `main.py`. If your extraction tool creates an additional outer folder, enter the inner project folder. The folder name can differ; the installer locates the project from its own path.
+
+</details>
+
+From that project directory, install and activate the environment:
+
+```bash
 bash install.sh
 conda activate cryoassembly
 ```
@@ -86,6 +106,41 @@ bash install.sh --help
 Use a new environment name, or select `--skip-env` for an existing environment with Python 3.8.20 and the CUDA 11.3 toolkit. `--verify-only` checks dependencies, imports and operators.
 
 `CONDA_BASE` selects the Conda installation. `MAX_JOBS` sets build workers (default 8). `PIP_INDEX_URL` and `PIP_FIND_LINKS` select a Python package mirror or wheel cache.
+
+</details>
+
+<details>
+<summary><strong>Official dependency downloads</strong></summary>
+
+`bash install.sh` downloads and installs dependencies automatically. These official links are available for manual downloads. For Python wheels, choose **Linux x86_64 / CPython 3.8**; versions are defined by [requirements.txt](requirements.txt) and [environment.yml](environment.yml).
+
+- [Miniconda official installers](https://repo.anaconda.com/miniconda/).
+- [Python Conda packages](https://anaconda.org/conda-forge/python/files): select version **3.8.20** and platform **linux-64**.
+- [NVIDIA CUDA toolkit packages](https://anaconda.org/nvidia/cuda-toolkit/files): select **11.3.1** in the **cuda-11.3.1** label.
+- [NVIDIA nvcc packages](https://anaconda.org/nvidia/cuda-nvcc/files): select **11.3.122** in the same label.
+- [PyTorch official cu113 index](https://download.pytorch.org/whl/cu113/torch/).
+
+| Package | Version | Official download |
+| :--- | :--- | :--- |
+| `torch` | 1.10.0+cu113 | [Linux / CPython 3.8 wheel](https://download-r2.pytorch.org/whl/cu113/torch-1.10.0%2Bcu113-cp38-cp38-linux_x86_64.whl) |
+| `numpy` | 1.21.5 | [PyPI files](https://pypi.org/project/numpy/1.21.5/#files) |
+| `scipy` | 1.10.1 | [PyPI files](https://pypi.org/project/scipy/1.10.1/#files) |
+| `numba` | 0.56.4 | [PyPI files](https://pypi.org/project/numba/0.56.4/#files) |
+| `llvmlite` | 0.39.1 | [PyPI files](https://pypi.org/project/llvmlite/0.39.1/#files) |
+| `scikit-learn` | 1.3.2 | [PyPI files](https://pypi.org/project/scikit-learn/1.3.2/#files) |
+| `biopython` | 1.79 | [PyPI files](https://pypi.org/project/biopython/1.79/#files) |
+| `mrcfile` | 1.5.3 | [PyPI files](https://pypi.org/project/mrcfile/1.5.3/#files) |
+| `open3d` | 0.14.1 | [PyPI files](https://pypi.org/project/open3d/0.14.1/#files) |
+| `easydict` | 1.13 | [PyPI files](https://pypi.org/project/easydict/1.13/#files) |
+| `tqdm` | 4.65.0 | [PyPI files](https://pypi.org/project/tqdm/4.65.0/#files) |
+| `threadpoolctl` | 3.5.0 | [PyPI files](https://pypi.org/project/threadpoolctl/3.5.0/#files) |
+| `einops` | 0.6.1 | [PyPI files](https://pypi.org/project/einops/0.6.1/#files) |
+| `ipdb` | 0.13.13 | [PyPI files](https://pypi.org/project/ipdb/0.13.13/#files) |
+| `ipython` | 8.12.3 | [PyPI files](https://pypi.org/project/ipython/8.12.3/#files) |
+| `ninja` | 1.11.1.4 | [PyPI files](https://pypi.org/project/ninja/1.11.1.4/#files) |
+| `pip` | 24.3.1 | [PyPI files](https://pypi.org/project/pip/24.3.1/#files) |
+| `setuptools` | 69.5.1 | [PyPI files](https://pypi.org/project/setuptools/69.5.1/#files) |
+| `wheel` | 0.45.1 | [PyPI files](https://pypi.org/project/wheel/0.45.1/#files) |
 
 </details>
 

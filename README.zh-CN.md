@@ -11,11 +11,13 @@
 ![CUDA：11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
 [![许可：LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
 
+<!--
 [**打开 CryoAssembly 在线服务器 ↗**](http://zhouxglab.com/CryoAssembly/)
+-->
 
 [English](README.md) · **简体中文**
 
-[在线服务器](#web-server) · [安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
+<!-- [在线服务器](#web-server) · --> [安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
 
 </div>
 
@@ -29,17 +31,21 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 | :--- | :--- |
 | 密度图、蛋白结构模型、分辨率和轮廓阈值 | 装配后的复合物模型（`.cif`）与装配摘要 |
 
+<!--
 <a id="web-server"></a>
 
 ## 在线服务器
 
 通过 [**CryoAssembly 在线服务器**](http://zhouxglab.com/CryoAssembly/) 在浏览器中提交密度图和蛋白结构，或按下面的[安装流程](#installation)在本地运行。
+-->
 
 <a id="installation"></a>
 
 ## 安装
 
 需要 **Linux x86_64**、NVIDIA GPU、Conda 和兼容的 C/C++ 编译器。已验证的安装基线为 Ubuntu 20.04、GCC/G++ 9.4 和 CUDA 11.3。
+
+测试硬件为 **NVIDIA A800 80GB PCIe**。已验证的安装与运行检查使用 **MIG 1g.10gb** 实例，可用显存为 9728 MiB。
 
 从 [GitHub 官方仓库](https://github.com/zhouBiolab/CryoAssembly) 获取源码：
 
@@ -83,6 +89,7 @@ sudo apt-get install build-essential libgl1 libgomp1
 | :--- | :--- |
 | 操作系统 | Ubuntu 20.04.6，Linux x86_64 |
 | 编译器 | GCC/G++ 9.4.0 |
+| 显卡 | NVIDIA A800 80GB PCIe；MIG 1g.10gb 实例 |
 | Python | 3.8.20 |
 | PyTorch | 1.10.0+cu113 |
 | CUDA 工具链 / nvcc | 11.3.1 / 11.3.122 |

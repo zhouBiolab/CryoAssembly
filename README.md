@@ -11,11 +11,13 @@
 ![CUDA: 11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
 
+<!--
 [**Open the CryoAssembly web server ↗**](http://zhouxglab.com/CryoAssembly/)
+-->
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Web server](#web-server) · [Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
+<!-- [Web server](#web-server) · --> [Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
 
 </div>
 
@@ -29,17 +31,21 @@ CryoAssembly fits and assembles input protein structures into cryo-electron micr
 | :--- | :--- |
 | Density map, protein structure models, resolution and contour level | Assembled complex models (`.cif`) and an assembly summary |
 
+<!--
 <a id="web-server"></a>
 
 ## Web server
 
 Submit your density map and protein structures through the [**CryoAssembly web server**](http://zhouxglab.com/CryoAssembly/), or use the [local installation](#installation) below.
+-->
 
 <a id="installation"></a>
 
 ## Installation
 
 Use **Linux x86_64**, an NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04, GCC/G++ 9.4 and CUDA 11.3.
+
+Tested on **NVIDIA A800 80GB PCIe**. The verified installation and runtime checks used a **MIG 1g.10gb** instance (9728 MiB available).
 
 Get the source from the [official GitHub repository](https://github.com/zhouBiolab/CryoAssembly):
 
@@ -83,6 +89,7 @@ sudo apt-get install build-essential libgl1 libgomp1
 | :--- | :--- |
 | Operating system | Ubuntu 20.04.6, Linux x86_64 |
 | Compiler | GCC/G++ 9.4.0 |
+| GPU | NVIDIA A800 80GB PCIe; MIG 1g.10gb instance |
 | Python | 3.8.20 |
 | PyTorch | 1.10.0+cu113 |
 | CUDA toolkit / nvcc | 11.3.1 / 11.3.122 |

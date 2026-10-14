@@ -17,7 +17,9 @@
 
 [English](README.md) · **简体中文**
 
-<!-- [在线服务器](#web-server) · --> [安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
+<!-- [在线服务器](#web-server) · -->
+
+[安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
 
 </div>
 

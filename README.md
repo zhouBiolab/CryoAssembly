@@ -17,7 +17,9 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-<!-- [Web server](#web-server) · --> [Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
+<!-- [Web server](#web-server) · -->
+
+[Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
 
 </div>
 

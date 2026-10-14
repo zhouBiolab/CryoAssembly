@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 class AssemblyOrchestrator:
     """Unified assembly: chains and domains interleaved by gyration radius."""
 
+    # Internal mask settings: radius = source radius of gyration * mask_radius_factor.
+    # Smaller radii reduce memory per fit but may require more masks and fitting attempts.
+    # Center spacing = mask radius * min_point_distance_factor; smaller spacing adds masks/time.
+    # Center spacing controls mask coverage, not point-cloud downsampling.
     def __init__(self, target_txt, source_dir, density_mrc,
                  resolution, contour, output_dir=None,
                  chain_threshold=0.45, initial_domain_threshold=0.45,

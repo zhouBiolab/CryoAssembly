@@ -47,7 +47,7 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 
 需要 **Linux x86_64**、NVIDIA GPU、Conda 和兼容的 C/C++ 编译器。已验证的安装基线为 Ubuntu 20.04、GCC/G++ 9.4 和 CUDA 11.3。
 
-测试硬件为 **NVIDIA A800 80GB PCIe**。已验证的安装与运行检查使用 **MIG 1g.10gb** 实例，可用显存为 9728 MiB。
+测试硬件为 **NVIDIA A800 80GB PCIe**。
 
 从 [GitHub 官方仓库](https://github.com/zhouBiolab/CryoAssembly) 获取源码：
 
@@ -91,7 +91,7 @@ sudo apt-get install build-essential libgl1 libgomp1
 | :--- | :--- |
 | 操作系统 | Ubuntu 20.04.6，Linux x86_64 |
 | 编译器 | GCC/G++ 9.4.0 |
-| 显卡 | NVIDIA A800 80GB PCIe；MIG 1g.10gb 实例 |
+| 显卡 | NVIDIA A800 80GB PCIe |
 | Python | 3.8.20 |
 | PyTorch | 1.10.0+cu113 |
 | CUDA 工具链 / nvcc | 11.3.1 / 11.3.122 |
@@ -240,9 +240,9 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 | `--complex-min-cc` | 0.25 | 最终域级输出过滤阈值 |
 | `--num-processes` | 8 | 评分与局部优化共用的 CPU 进程池大小 |
 | `--batch-size` | 5 | 每批累积评估的候选数 |
-| `--mask-radius-factor` | 1.35 | 掩码半径相对于源结构回转半径的倍数；减小可降低单次拟合显存占用，但会增加拟合次数 |
-| `--min-point-distance-factor` | 0.32 | 掩码中心间距相对于掩码半径的系数 |
 | `--hypothesis-chunk` | 64 | 每块评分的位姿假设数，用于限制推理显存 |
+
+`CC_mask` 计算实现更新后，可根据数据将 `--chain-threshold` 和 `--domain-threshold` 从 0.45 适当提高至 **0.50**，中低分辨率数据也可考虑这一设置。提高阈值可能增加拟合尝试次数与运行时间。
 
 位姿假设分块的有效默认值为 64。显式 CLI 值优先于 `--runtime-config`；设为 `0` 会关闭假设分块，保留查询分块。
 
@@ -274,7 +274,7 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 <details>
 <summary><strong>GPU 显存不足时怎么办？</strong></summary>
 
-减小 `--mask-radius-factor` 以使用更小的密度区域，或减小正整数 `--hypothesis-chunk` 以减少每次评分的位姿假设数。`--num-processes` 控制 CPU 进程数。
+减小正整数 `--hypothesis-chunk` 以减少每次评分的位姿假设数。`--num-processes` 控制 CPU 进程数。
 
 </details>
 

@@ -19,6 +19,8 @@ def build_parser():
                         help='Write a log to the output directory (pipeline_<timestamp>.log)')
     parser.add_argument("--log-file", metavar="PATH",
                         help='Explicit log path (takes precedence over --log)')
+    # With the updated CC_mask calculation, consider 0.50 for medium/low-resolution maps.
+    # Higher chain/domain thresholds may require more fitting attempts and time.
     parser.add_argument("--chain-threshold", type=float, default=0.45, metavar="CC")
     parser.add_argument("--domain-threshold", type=float, default=0.45, metavar="CC")
     parser.add_argument("--domain-min-cc", type=float, default=0.35, metavar="CC")
@@ -30,10 +32,6 @@ def build_parser():
                         help='Worker processes for CC scoring and local optimization')
     parser.add_argument("--batch-size", type=int, default=5, metavar="N",
                         help='Candidates per evaluation batch (each batch is locally optimized immediately)')
-    parser.add_argument("--mask-radius-factor", type=float, default=1.35,
-                        metavar="F", help='PARENet mask radius as a multiple of the radius of gyration')
-    parser.add_argument("--min-point-distance-factor", type=float, default=0.32,
-                        metavar="F", help='Minimum mask-center spacing as a multiple of the mask radius')
     parser.add_argument("--complex-domain-opt", action="store_true",
                         help='Complex domain optimization: split chains -> partition domains -> optimize domains -> merge and compare CC')
     parser.add_argument("--no-improve-accepted", dest="improve_accepted",
@@ -92,8 +90,6 @@ def assembly_kwargs_from(args):
         "refine_tm": args.refine_tm,
         "num_processes": args.num_processes,
         "batch_size": args.batch_size,
-        "mask_radius_factor": args.mask_radius_factor,
-        "min_point_distance_factor": args.min_point_distance_factor,
         "homo_chain_refine": args.homo_chain_refine,
         "pre_screen": args.pre_screen,
         "pre_screen_by_domain": args.pre_screen_by_domain,

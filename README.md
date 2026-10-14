@@ -47,7 +47,7 @@ Submit your density map and protein structures through the [**CryoAssembly web s
 
 Use **Linux x86_64**, an NVIDIA GPU, Conda and a compatible C/C++ compiler. The verified installation baseline is Ubuntu 20.04, GCC/G++ 9.4 and CUDA 11.3.
 
-Tested on **NVIDIA A800 80GB PCIe**. The verified installation and runtime checks used a **MIG 1g.10gb** instance (9728 MiB available).
+Tested on **NVIDIA A800 80GB PCIe**.
 
 Get the source from the [official GitHub repository](https://github.com/zhouBiolab/CryoAssembly):
 
@@ -91,7 +91,7 @@ sudo apt-get install build-essential libgl1 libgomp1
 | :--- | :--- |
 | Operating system | Ubuntu 20.04.6, Linux x86_64 |
 | Compiler | GCC/G++ 9.4.0 |
-| GPU | NVIDIA A800 80GB PCIe; MIG 1g.10gb instance |
+| GPU | NVIDIA A800 80GB PCIe |
 | Python | 3.8.20 |
 | PyTorch | 1.10.0+cu113 |
 | CUDA toolkit / nvcc | 11.3.1 / 11.3.122 |
@@ -240,9 +240,9 @@ Use `--no-refine` to disable homologous-domain refinement.
 | `--complex-min-cc` | 0.25 | Final domain-level output filter |
 | `--num-processes` | 8 | Shared CPU process-pool size for scoring and local optimization |
 | `--batch-size` | 5 | Candidates accumulated per evaluation batch |
-| `--mask-radius-factor` | 1.35 | Mask radius relative to the source radius of gyration. Smaller masks reduce GPU memory per fit but require more fitting attempts |
-| `--min-point-distance-factor` | 0.32 | Mask-center spacing factor relative to the mask radius |
 | `--hypothesis-chunk` | 64 | Hypotheses scored per block to bound inference memory |
+
+With the updated `CC_mask` calculation, consider raising `--chain-threshold` and `--domain-threshold` from 0.45 to **0.50**, depending on the data, including medium- and low-resolution maps. Higher thresholds may increase fitting attempts and runtime.
 
 The effective hypothesis-chunk default is 64. A CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling.
 
@@ -274,7 +274,7 @@ Start with the map's recommended contour level and inspect the retained density.
 <details>
 <summary><strong>What if GPU memory is insufficient?</strong></summary>
 
-Reduce `--mask-radius-factor` to use smaller map regions, or use a smaller positive `--hypothesis-chunk` to score fewer hypotheses at once. `--num-processes` controls CPU workers.
+Use a smaller positive `--hypothesis-chunk` to score fewer hypotheses at once. `--num-processes` controls CPU workers.
 
 </details>
 

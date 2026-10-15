@@ -312,7 +312,7 @@ def generate_masks_once(src_points, ref_points, mask_params, output_dir,
         source_data=source_path, target_data=target_path,
         mask_radius_factor=mask_params.get("mask_radius_factor", 1.35),
         min_coverage=mask_params.get("min_coverage", 0.15),
-        min_point_distance_factor=mask_params.get("min_point_distance_factor", 0.32),
+        min_point_distance_factor=mask_params.get("min_point_distance_factor", 0.33),
         verbose=mask_params.get("verbose", True))
 
     if len(masks) == 0:
@@ -347,7 +347,7 @@ def make_parser():
     p.add_argument("--use_mask", action="store_true")
     p.add_argument("--mask_radius_factor", type=float, default=1.35)
     p.add_argument("--min_coverage", type=float, default=0.15)
-    p.add_argument("--min_point_distance_factor", type=float, default=0.32)
+    p.add_argument("--min_point_distance_factor", type=float, default=0.33)
     p.add_argument("--save_masks", action="store_true")
     p.add_argument("--geometry-cache-mb", type=int, default=DEFAULT_GEOMETRY_CACHE_MB,
                    help='Single-cloud CPU geometry cache capacity (MiB, 0 disables, default %d)'
@@ -403,7 +403,7 @@ def _get_model(weights, allow_tf32, hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK):
 def run_inference(target, source, chain_pdb, output_dir, weights,
                   use_mask=True, configs="all", seed=100000,
                   mask_radius_factor=1.35, min_coverage=0.15,
-                  min_point_distance_factor=0.32, stop_file=None,
+                  min_point_distance_factor=0.33, stop_file=None,
                   geometry_cache=None, allow_tf32=DEFAULT_ALLOW_TF32,
                   inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
                   hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK,
@@ -657,7 +657,7 @@ def _server_loop(weights, geometry_cache_mb=DEFAULT_GEOMETRY_CACHE_MB,
                 seed=req.get("seed", 100000),
                 mask_radius_factor=req.get("mask_radius_factor", 1.35),
                 min_coverage=req.get("min_coverage", 0.15),
-                min_point_distance_factor=req.get("min_point_distance_factor", 0.32),
+                min_point_distance_factor=req.get("min_point_distance_factor", 0.33),
                 stop_file=stop_file, geometry_cache=geometry_cache,
                 allow_tf32=resolved_tf32,
                 inference_mode=req.get("inference_mode") or inference_mode,

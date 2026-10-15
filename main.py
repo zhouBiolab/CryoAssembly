@@ -19,10 +19,10 @@ def build_parser():
                         help='Write a log to the output directory (pipeline_<timestamp>.log)')
     parser.add_argument("--log-file", metavar="PATH",
                         help='Explicit log path (takes precedence over --log)')
-    # With the updated CC_mask calculation, consider 0.50 for medium/low-resolution maps.
+    # Initial chain/domain thresholds use the updated CC_mask calculation (default 0.50).
     # Higher chain/domain thresholds may require more fitting attempts and time.
-    parser.add_argument("--chain-threshold", type=float, default=0.45, metavar="CC")
-    parser.add_argument("--domain-threshold", type=float, default=0.45, metavar="CC")
+    parser.add_argument("--chain-threshold", type=float, default=0.50, metavar="CC")
+    parser.add_argument("--domain-threshold", type=float, default=0.50, metavar="CC")
     parser.add_argument("--domain-min-cc", type=float, default=0.35, metavar="CC")
     parser.add_argument("--complex-threshold", type=float, default=0.35, metavar="CC")
     parser.add_argument("--complex-min-cc", type=float, default=0.25, metavar="CC")

@@ -202,7 +202,7 @@ class ParenetRequest:
 
 def start_request(target, source, chain_pdb, output_dir,
                   use_mask=True, configs="all",
-                  mask_radius_factor=1.35, min_point_distance_factor=0.32,
+                  mask_radius_factor=1.35, min_point_distance_factor=0.33,
                   inference_mode=None, request_id=None):
     os.makedirs(output_dir, exist_ok=True)
     # clear stale markers/ledger from any previous run in this dir
@@ -228,8 +228,6 @@ def start_request(target, source, chain_pdb, output_dir,
         request["request_id"] = str(request_id)
     server.stdin.write(json.dumps(request) + "\n")
     server.stdin.flush()
-    log.info("PARENet request: %s (request_id=%s, mask_radius_factor=%.2f, "
-             "min_point_distance_factor=%.2f)",
-             os.path.basename(str(source)), request_id,
-             mask_radius_factor, min_point_distance_factor)
+    log.info("PARENet request: %s (request_id=%s)",
+             os.path.basename(str(source)), request_id)
     return ParenetRequest(output_dir, request_id, server=server)

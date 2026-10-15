@@ -54,7 +54,7 @@ def run_fitting(target_txt, source, density_mrc, resolution, contour,
                 output_dir, mode="chain", chain_pdb=None,
                 early_stop_threshold=0.54, original_density_mrc=None,
                 num_processes=1, batch_size=8,
-                mask_radius_factor=1.35, min_point_distance_factor=0.32,
+                mask_radius_factor=1.35, min_point_distance_factor=0.33,
                 context=None):
     """Unified entry point for chain and domain fitting.
 
@@ -72,7 +72,7 @@ def run_fitting(target_txt, source, density_mrc, resolution, contour,
         num_processes: worker count; only used when `context` is not given
         batch_size: candidate ids per monitoring window
         mask_radius_factor: PARENet mask radius as a scale of the gyration radius
-        min_point_distance_factor: PARENet minimum point spacing, in mask radii
+        min_point_distance_factor: Mask-center spacing in mask-radius units, not point downsampling
 
     Returns:
         dict: success (bool), final_pdb (str|None), cc_mask (float)

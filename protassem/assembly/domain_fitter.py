@@ -8,6 +8,17 @@ from protassem.assembly.assembly_opt import homolog_threshold
 log = logging.getLogger(__name__)
 
 
+def effective_domain_threshold(orch, drec, threshold):
+    eff = threshold
+    if orch._is_homolog_accepted_domain(drec):
+        gid = drec.get("group_id")
+        accepted_ccs = orch.accepted_domain_group_ccs.get(gid, []) if gid is not None else []
+        eff = max(orch.min_domain_threshold,
+                  homolog_threshold(threshold, orch.domain_similar_relax,
+                                    accepted_ccs, low_band=False))
+    return eff
+
+
 def fit_domain_once(orch, drec, threshold, round_num):
     cid = drec["chain_id"]
     dnum = drec["domain_num"]
@@ -16,13 +27,7 @@ def fit_domain_once(orch, drec, threshold, round_num):
     orch._domain_iter += 1
     fit_dir = (orch.work_dir / "domain_fit" / ("round%02d" % round_num)
                / ("%s_d%d" % (cid, dnum)))
-    eff = threshold
-    if orch._is_homolog_accepted_domain(drec):
-        gid = drec.get("group_id")
-        accepted_ccs = orch.accepted_domain_group_ccs.get(gid, []) if gid is not None else []
-        eff = max(orch.min_domain_threshold,
-                  homolog_threshold(threshold, orch.domain_similar_relax,
-                                    accepted_ccs, low_band=False))
+    eff = effective_domain_threshold(orch, drec, threshold)
     log.info('  [Domain fitting] %s | round %d | thr=%.3f%s', dkey, round_num, threshold,
              "" if eff == threshold else " (eff=%.3f)" % eff)
     fit_result = run_fitting(

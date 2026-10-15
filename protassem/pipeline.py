@@ -257,8 +257,8 @@ def run_pipeline(density_mrc, structure_files, resolution, contour,
     kw = assembly_kwargs or {}
     log.info("  chain_threshold=%.3f  domain_threshold=%.3f  "
              "min_domain=%.3f  similarity=%.2f",
-             kw.get("chain_threshold", 0.45),
-             kw.get("initial_domain_threshold", 0.45),
+             kw.get("chain_threshold", 0.50),
+             kw.get("initial_domain_threshold", 0.50),
              kw.get("min_domain_threshold", 0.25),
              kw.get("similarity_threshold", 0.85))
 

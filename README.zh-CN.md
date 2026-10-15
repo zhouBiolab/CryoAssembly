@@ -11,13 +11,7 @@
 ![CUDA：11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
 [![许可：LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
 
-<!--
-[**打开 CryoAssembly 在线服务器 ↗**](http://zhouxglab.com/CryoAssembly/)
--->
-
 [English](README.md) · **简体中文**
-
-<!-- [在线服务器](#web-server) · -->
 
 [安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
 
@@ -32,14 +26,6 @@ CryoAssembly 将输入的蛋白结构拟合并装配到冷冻电镜（cryo-EM）
 | 输入 | 输出 |
 | :--- | :--- |
 | 密度图、蛋白结构模型、分辨率和轮廓阈值 | 装配后的复合物模型（`.cif`）与装配摘要 |
-
-<!--
-<a id="web-server"></a>
-
-## 在线服务器
-
-通过 [**CryoAssembly 在线服务器**](http://zhouxglab.com/CryoAssembly/) 在浏览器中提交密度图和蛋白结构，或按下面的[安装流程](#installation)在本地运行。
--->
 
 <a id="installation"></a>
 
@@ -233,8 +219,8 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 
 | 选项 | 默认值 | 含义 |
 | :--- | :---: | :--- |
-| `--chain-threshold` | 0.45 | 链拟合早停与预筛阈值 |
-| `--domain-threshold` | 0.45 | 独立域拟合的初始阈值 |
+| `--chain-threshold` | 0.50 | 链拟合早停与预筛阈值 |
+| `--domain-threshold` | 0.50 | 独立域拟合的初始阈值 |
 | `--complex-threshold` | 0.35 | 多链模板整体拟合的早停与预筛阈值 |
 | `--domain-min-cc` | 0.35 | 域拟合阈值的调整下限 |
 | `--complex-min-cc` | 0.25 | 最终域级输出过滤阈值 |
@@ -242,7 +228,7 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 | `--batch-size` | 5 | 每批累积评估的候选数 |
 | `--hypothesis-chunk` | 64 | 每块评分的位姿假设数，用于限制推理显存 |
 
-`CC_mask` 计算实现更新后，可根据数据将 `--chain-threshold` 和 `--domain-threshold` 从 0.45 适当提高至 **0.50**，中低分辨率数据也可考虑这一设置。提高阈值可能增加拟合尝试次数与运行时间。
+原论文使用的 `CC_mask` 阈值为 **0.45**。由于 `CC_mask` 计算程序已有变化，当前代码的链／域初始阈值默认采用 **0.50**。可根据数据调整；提高阈值可能增加拟合尝试次数与运行时间。
 
 位姿假设分块的有效默认值为 64。显式 CLI 值优先于 `--runtime-config`；设为 `0` 会关闭假设分块，保留查询分块。
 
@@ -258,7 +244,6 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 2. **使用 CryoPARE-Net 估计拟合姿态。** 学习几何特征以建立对应关系并估计刚体姿态，随后进行密度引导的局部优化。
 3. **通过链和域完成分层装配。** 链级拟合为域处理提供候选姿态，剩余域独立拟合；接受域时掩蔽其占据的密度区域。
 4. **合并与精修。** 将已接受的域合并成链和复合物；同源域姿态重分配利用连接信息，随后通过输出过滤和可选精修生成最终模型。
-
 
 <a id="faq"></a>
 

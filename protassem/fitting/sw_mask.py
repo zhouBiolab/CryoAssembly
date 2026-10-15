@@ -67,9 +67,7 @@ class SphericalMaskGenerator:
 
         if self.verbose:
             print(f"Reference point-cloud maximum radius: {ref_max_radius:.3f}")
-            print(f"Spherical mask radius: {mask_radius:.3f}")
             print(f"Search scope: {search_extent:.3f}")
-            print(f"Minimum point spacing: {min_point_distance:.3f}")
 
         distances_to_centroid = np.sqrt(distances_squared)
         valid_mask = distances_to_centroid < search_extent
@@ -203,7 +201,6 @@ class SphericalMaskGenerator:
             print(f"\n=== Generating local spherical masks ===")
             print(f"Source point cloud contains {len(src_points)} points")
             print(f"Source point-cloud radius of gyration: {gyration_radius:.3f}")
-            print(f"Spherical mask radius: {mask_radius:.3f}")
             print(f"Minimum point-count threshold: {min_points_threshold}")
 
         if center_mode == "fps" and hasattr(self, "select_initial_points_fps"):

@@ -72,3 +72,18 @@ SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
 /ALGORITHM.md
 /workflow.png
 /THIRD_PARTY_NOTICES.md
+
+# Local case data, environment packages and audit artifacts
+/7ash/
+/7ptt/
+/8bnr/
+/8dme/
+/8xwq/
+/.local_changes/
+/envs/
+/wheelhouse/
+/install_audit*/
+/install_my_server*/
+/.cache/
+*.map
+*.ccp4

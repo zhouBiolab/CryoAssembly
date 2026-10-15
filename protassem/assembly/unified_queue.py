@@ -2,6 +2,7 @@ import logging
 
 from protassem.core.similarity import calculate_tm_score
 from protassem.assembly.assembly_opt import select_round_end_candidate
+from protassem.assembly.pose_guard import InitialPoseGuard
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def _active_items(orch, recent_pdbs=None):
 
 def run_unified_assembly(orch):
     from protassem.assembly.chain_fitter import fit_chain_item, ChainFitState
-    from protassem.assembly.domain_fitter import fit_domain_once
+    from protassem.assembly.domain_fitter import fit_domain_once, effective_domain_threshold
 
     log.info("=" * 60)
     log.info("Unified GLOBAL-ROUND assembly (domain thr %.3f -> %.3f)",
@@ -106,6 +107,8 @@ def run_unified_assembly(orch):
     log.info("=" * 60)
 
     chain_state = ChainFitState()
+    pose_guard = InitialPoseGuard()
+    chain_state.pose_guard = pose_guard
     for rec in orch.chain_records:
         if rec["status"] == "accepted_as_chain":
             gid = rec.get("group_id", rec["chain_id"])
@@ -134,6 +137,7 @@ def run_unified_assembly(orch):
         if not items:
             break
         round_num += 1
+        chain_state.round_num = round_num
         dom_before = len(orch.accepted_domain_pdbs)
         labels = []
         for t, r in items:
@@ -179,6 +183,14 @@ def run_unified_assembly(orch):
             dkey = "%s_d%d" % (drec["chain_id"], drec["domain_num"])
 
             gid = drec.get("group_id")
+            eff = effective_domain_threshold(orch, drec, threshold)
+            if pose_guard.find_failed(orch, round_num, 'domain', gid, drec, eff):
+                skipped_count += 1
+                continue
+            try:
+                pose_scope = pose_guard.scope(orch, round_num)
+            except OSError:
+                pose_scope = None
             if gid is not None:
                 if gid not in accepted_gids:
                     if group_count.get(gid, 0) >= 2:
@@ -210,6 +222,9 @@ def run_unified_assembly(orch):
                          round_num, dkey)
                 break
             elif status == "candidate":
+                if pose_scope is not None:
+                    pose_guard.record_failed(orch, round_num, 'domain', gid,
+                                             drec, eff, cc, pose_scope)
                 drec["_rcc"] = cc
                 drec["_rpdb"] = fp
                 candidates.append(drec)
@@ -231,7 +246,7 @@ def run_unified_assembly(orch):
             decreases += 1
             log.info('[Round %d] lower threshold %.3f -> %.3f', round_num, old, threshold)
         elif skipped_count > 0:
-            log.info('[Round %d] no accepted item or candidate, but %d skipped by 2-tries -> retry next round',
+            log.info('[Round %d] no accepted item or candidate, but %d deferred by homolog/pose checks -> retry next round',
                      round_num, skipped_count)
         elif processed > 0:
             log.info('[Round %d] all %d items failed/rejected (no acceptance or candidate) -> next round with queued domains', round_num, processed)

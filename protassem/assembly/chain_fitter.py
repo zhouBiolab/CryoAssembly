@@ -13,6 +13,7 @@ from protassem.core.similarity import calculate_tm_score
 from protassem.fitting.pipeline import run_fitting
 from protassem.fitting.local_optimizer import local_optimize
 from protassem.assembly.assembly_opt import homolog_threshold
+from protassem.assembly.pose_guard import InitialPoseGuard
 
 MAX_CHAIN_RETRY = 2
 
@@ -28,6 +29,8 @@ class ChainFitState:
         self.accepted_chain_pdbs = []
         self.group_fail_count = defaultdict(int)
         self.accepted_group_ids = set()
+        self.pose_guard = InitialPoseGuard()
+        self.round_num = 0
 
 
 def fit_chain_item(orch, rec, state):
@@ -47,7 +50,7 @@ def fit_chain_item(orch, rec, state):
     state.similar_groups[group_id].append(rec)
 
     hgid = group_id
-    if (hgid not in state.accepted_group_ids
+    if (is_complex and hgid not in state.accepted_group_ids
             and state.group_fail_count.get(hgid, 0) >= 2):
         rec["status"] = "skipped_similar_failed"
         domains = [d for d in orch.domain_records.get(cid, [])
@@ -64,6 +67,26 @@ def fit_chain_item(orch, rec, state):
     if not orch._target_has_points():
         return None
 
+    base_threshold = orch.complex_threshold if is_complex else orch.chain_threshold
+    accepted_ccs = [r.get("cc_mask") for r in state.accepted_groups.get(group_id, [])
+                    if r.get("cc_mask") is not None]
+    threshold = homolog_threshold(base_threshold, orch.chain_similar_relax, accepted_ccs)
+    pose_scope = None
+    if not is_complex:
+        if state.pose_guard.find_failed(orch, state.round_num, 'chain', group_id,
+                                        rec, threshold):
+            domains = [d for d in orch.domain_records.get(cid, [])
+                       if d['status'] == 'available']
+            rec['status'] = 'needs_domain_assembly' if domains else 'rejected_no_domain'
+            rec['skip_reason'] = 'same_initial_pose'
+            if domains and cid not in orch.needs_domain_assembly:
+                orch.needs_domain_assembly.append(cid)
+            return domains or None
+        try:
+            pose_scope = state.pose_guard.scope(orch, state.round_num)
+        except OSError:
+            pass
+
     orch._ensure_work_files()
     orch._chain_iter += 1
     log.info("Chain fitting %d: %s%s", orch._chain_iter, cid,
@@ -75,11 +98,6 @@ def fit_chain_item(orch, rec, state):
     shutil.copy2(rec["pdb_file"], temp_chain_dir)
     shutil.copy2(rec["txt_file"], temp_chain_dir)
 
-    base_threshold = orch.complex_threshold if is_complex else orch.chain_threshold
-
-    accepted_ccs = [r.get("cc_mask") for r in state.accepted_groups.get(group_id, [])
-                    if r.get("cc_mask") is not None]
-    threshold = homolog_threshold(base_threshold, orch.chain_similar_relax, accepted_ccs)
     if accepted_ccs:
         log.info('Chain %s: homologous group has %d accepted members (min cc=%.4f) -> eff_thr=%.3f',
                  cid, len(accepted_ccs), min(accepted_ccs), threshold)
@@ -135,6 +153,9 @@ def fit_chain_item(orch, rec, state):
             rec["status"] = "needs_domain_assembly"
             orch.failed_chain_pdbs.append(pdb)
             state.group_fail_count[hgid] += 1
+            if pose_scope is not None:
+                state.pose_guard.record_failed(orch, state.round_num, 'chain',
+                                               group_id, rec, threshold, cc, pose_scope)
         orch.needs_domain_assembly.append(cid)
         return [d for d in domains if d["status"] == "available"]
     else:

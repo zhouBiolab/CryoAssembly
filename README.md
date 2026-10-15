@@ -11,13 +11,7 @@
 ![CUDA: 11.3](https://img.shields.io/badge/CUDA-11.3-347D83)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-347D83)](LICENSE)
 
-<!--
-[**Open the CryoAssembly web server ↗**](http://zhouxglab.com/CryoAssembly/)
--->
-
 **English** · [简体中文](README.zh-CN.md)
-
-<!-- [Web server](#web-server) · -->
 
 [Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
 
@@ -32,14 +26,6 @@ CryoAssembly fits and assembles input protein structures into cryo-electron micr
 | Input | Output |
 | :--- | :--- |
 | Density map, protein structure models, resolution and contour level | Assembled complex models (`.cif`) and an assembly summary |
-
-<!--
-<a id="web-server"></a>
-
-## Web server
-
-Submit your density map and protein structures through the [**CryoAssembly web server**](http://zhouxglab.com/CryoAssembly/), or use the [local installation](#installation) below.
--->
 
 <a id="installation"></a>
 
@@ -233,8 +219,8 @@ Use `--no-refine` to disable homologous-domain refinement.
 
 | Option | Default | Meaning |
 | :--- | :---: | :--- |
-| `--chain-threshold` | 0.45 | Chain-fitting early-stop and pre-screen threshold |
-| `--domain-threshold` | 0.45 | Initial independent-domain threshold |
+| `--chain-threshold` | 0.50 | Chain-fitting early-stop and pre-screen threshold |
+| `--domain-threshold` | 0.50 | Initial independent-domain threshold |
 | `--complex-threshold` | 0.35 | Multi-chain template early-stop and pre-screen threshold |
 | `--domain-min-cc` | 0.35 | Domain-threshold adaptation floor |
 | `--complex-min-cc` | 0.25 | Final domain-level output filter |
@@ -242,7 +228,7 @@ Use `--no-refine` to disable homologous-domain refinement.
 | `--batch-size` | 5 | Candidates accumulated per evaluation batch |
 | `--hypothesis-chunk` | 64 | Hypotheses scored per block to bound inference memory |
 
-With the updated `CC_mask` calculation, consider raising `--chain-threshold` and `--domain-threshold` from 0.45 to **0.50**, depending on the data, including medium- and low-resolution maps. Higher thresholds may increase fitting attempts and runtime.
+The original paper used a `CC_mask` threshold of **0.45**. Following changes to the `CC_mask` calculation, the current chain and domain initial thresholds default to **0.50**. Adjust them for your data; higher thresholds may increase fitting attempts and runtime.
 
 The effective hypothesis-chunk default is 64. A CLI value overrides `--runtime-config`; `0` disables hypothesis chunks while retaining query tiling.
 
@@ -258,7 +244,6 @@ Use `python main.py --help` for all options.
 2. **Estimate fitting poses with CryoPARE-Net.** Learned geometric features establish correspondences and support rigid-pose estimation, followed by density-guided local optimization.
 3. **Assemble through chains and domains.** Chain-level fitting provides candidate poses for domain processing. Remaining domains are fitted independently, and occupied density is masked as domains are accepted.
 4. **Merge and refine.** Accepted domains are assembled into chains and a complex; homologous-domain pose reassignment uses connectivity information. Output filtering and optional refinement provide the final models.
-
 
 <a id="faq"></a>
 

@@ -1,0 +1,14 @@
+name: cryoassembly
+channels:
+  - nvidia/label/cuda-11.3.1
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.8.20
+  - pip=24.3.1
+  - setuptools=69.5.1
+  - wheel=0.45.1
+  - cuda-toolkit=11.3.1
+  - cuda-nvcc=11.3.122
+  - pip:
+      - -r requirements.txt

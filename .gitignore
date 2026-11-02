@@ -1,0 +1,89 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+.venv/
+venv/
+env/
+
+outputs/
+results/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.npz
+*.mrc
+
+# Private test data and runtime outputs
+test/
+
+.vscode/
+.idea/
+.DS_Store
+
+# Compiled extensions and build artifacts
+*.so
+build/
+dist/
+*.egg-info/
+
+# ---------------------------------------------------------------------------
+# Private development and test assets
+# ---------------------------------------------------------------------------
+tests/
+tools/
+protassem/sampling/extract_points/
+init_modeling.py
+geo_test.py
+
+# ---------------------------------------------------------------------------
+# Internal development documents
+# Public documentation: README.md and README.zh-CN.md
+# ---------------------------------------------------------------------------
+PROJECT_ARCHITECTURE.md
+ENGINEERING_HARDENING_PLAN.md
+INFERENCE_ENGINEERING_PLAN.md
+MASK_REGISTRATION_OPTIMIZATION_TASKS.md
+RUNTIME_ASSEMBLY_LOGIC_REVIEW.md
+STEP4_ASSEMBLY_NOTES.md
+TASK_INDEX.md
+SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
+组装算法逻辑.md
+
+/_backup*/
+
+/output/
+
+/protassem/fitting/pareconv_src/pareconv/modules/ops/test.py
+
+/protassem/fitting/pareconv_src/pareconv/modules/ops/test_gird.py
+
+/tests/test_low_memory_cli.py
+
+# Internal standalone utilities; retain locally without publishing
+/compute_cc_mask.py
+/geo_sym_refine.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver/down_pdb.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver/tran_cif.py
+/protassem/fitting/pareconv_src/pareconv/datasets/registration/point_ver_norm/dele.py
+/check_clash.py
+/ALGORITHM.md
+/workflow.png
+/THIRD_PARTY_NOTICES.md
+
+# Local case data, environment packages and audit artifacts
+/7ash/
+/7ptt/
+/8bnr/
+/8dme/
+/8xwq/
+/.local_changes/
+/envs/
+/wheelhouse/
+/install_audit*/
+/install_my_server*/
+/.cache/
+*.map
+*.ccp4

@@ -1,0 +1,20 @@
+# Validated installation baseline: CPython 3.8, Linux x86_64.
+# CUDA wheels for this exact PyTorch version are hosted by PyTorch, not PyPI.
+--extra-index-url https://download.pytorch.org/whl/cu113
+
+torch==1.10.0+cu113
+numpy==1.21.5
+scipy==1.10.1
+numba==0.56.4
+llvmlite==0.39.1
+scikit-learn==1.3.2
+biopython==1.79
+mrcfile==1.5.3
+open3d==0.14.1
+easydict==1.13
+tqdm==4.65.0
+threadpoolctl==3.5.0
+einops==0.6.1
+ipdb==0.13.13
+ipython==8.12.3
+ninja==1.11.1.4

@@ -1,0 +1,713 @@
+"""PARENet inference engine — GPU point cloud registration.
+
+Core logic: loads PARENet model, runs inference on source/target point clouds,
+generates predicted PDB structures with overlap scoring.
+
+Dependencies:
+  - config, model, pareconv: loaded via sys.path from original project
+  - sw_mask: spherical mask generator (local copy)
+  - fitting/utils: shared utilities (compute_overlap, FPS, PDB transform, etc.)
+"""
+
+import os
+import sys
+import logging
+import numpy as np
+import random
+import glob
+import torch
+import argparse
+import warnings
+from tqdm import tqdm
+from typing import Union, Tuple, List
+import re
+import json
+
+# Add project root so protassem package is importable when run as subprocess
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+import pareconv.utils.data_mask as data_mask_module
+from protassem.fitting.parenet.config import make_cfg
+from protassem.fitting.parenet.model import create_model, INFERENCE_OUTPUT_FIELDS
+from protassem.core.points_txt import read_point_cloud_file
+from protassem.fitting.candidate_ledger import (CandidateLedgerWriter,
+                                                MASK_ERROR_REASON)
+from protassem.fitting.cloud_encoding import (acquire_geometry, join_geometries,
+                                              EncodingCache, GeometryCache)
+from protassem.fitting.parenet.model import model_fingerprint
+from protassem.runtime.config import (DEFAULT_ALLOW_TF32, DEFAULT_ENCODING_CACHE_MB,
+                                      DEFAULT_GEOMETRY_CACHE_MB, DEFAULT_HYPOTHESIS_CHUNK,
+                                      DEFAULT_INFERENCE_MODE, DEFAULT_TAIL_PIPELINE,
+                                      INFERENCE_MODES, apply_tf32_policy,
+                                      effective_allow_tf32)
+from protassem.runtime.tail_pipeline import TailPipeline
+
+from protassem.fitting.utils import (
+    compute_overlap,
+    farthest_point_sampling_numba,
+    apply_transformation,
+    transform_pdb,
+    generate_output_pdb_path,
+    generate_optimal_pdb_path,
+    find_mask_files,
+    rename_pdb_files_by_ranking,
+    process_single_mask_optimally,
+    SAMPLING_METHODS,
+)
+
+try:
+    from protassem.fitting.sw_mask import (
+        generate_spherical_masks, save_masks, SphericalMaskGenerator
+    )
+    MASK_MODULE_AVAILABLE = True
+except ImportError:
+    MASK_MODULE_AVAILABLE = False
+    logging.warning("sw_mask not available, mask mode disabled")
+
+warnings.filterwarnings("ignore", category=UserWarning)
+
+log = logging.getLogger(__name__)
+
+# ======================================================================
+# Voxel size configurations
+# ======================================================================
+
+VOXEL_SIZE_CONFIGS_NORMAL = {
+    0: [2, 3.6, 6.48, 11.664],
+    1: [1, 1, 3.6, 6.48],
+    2: [1, 1, 4, 12],
+    3: [1, 2, 4, 11],
+    4: [1, 3.6, 6.48, 11.664],
+    # 5: [1, 1, 4, 8],
+}
+
+VOXEL_SIZE_CONFIGS_MASK = {
+    0: [2, 3.6, 6.48, 11.664],
+    1: [1, 1, 3.6, 6.48],
+    2: [1, 1, 4, 12],
+    3: [1, 2, 4, 11],
+    4: [1, 3.6, 6.48, 11.664],
+    # 5: [1, 1, 4, 8],
+    # 6: [1, 1, 2, 4],
+}
+
+
+# ======================================================================
+# Point cloud I/O and preprocessing
+# ======================================================================
+
+def load_sample_points(file_path):
+    return read_point_cloud_file(file_path)
+
+
+def load_mask_points(file_path):
+    """Load mask file, return (N,3) coordinate array."""
+    points = []
+    with open(file_path, "r") as f:
+        lines = f.readlines()
+    for i in range(5, len(lines)):
+        line = lines[i].strip()
+        if not line or line.startswith("#"):
+            continue
+        rel = i - 5 + 1
+        if rel % 2 == 1:
+            parts = line.split()
+            if len(parts) >= 4:
+                points.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    if not points:
+        raise ValueError(f"No points in mask file: {file_path}")
+    return np.array(points, dtype=np.float32)
+
+
+class PreprocessedData:
+    """Container for preprocessed point cloud data."""
+
+    def __init__(self, points, vectors, density, indices, centroid, is_mask_file=False):
+        self.points = points
+        self.vectors = vectors
+        self.density = density
+        self.indices = indices
+        self.centroid = centroid
+        self.is_mask_file = is_mask_file
+
+
+def preprocess_point_cloud_data(file_path, point_limit=65000, is_mask_file=False):
+    """Load and preprocess point cloud data."""
+    if is_mask_file:
+        pts = load_mask_points(file_path)
+        return PreprocessedData(
+            pts, np.ones((len(pts), 3), dtype=np.float32),
+            np.ones(len(pts), dtype=np.float32),
+            np.arange(len(pts), dtype=np.int32),
+            pts.mean(axis=0), True)
+
+    data = load_sample_points(file_path)
+    if point_limit and len(data) > point_limit:
+        idx = farthest_point_sampling_numba(data["point"], point_limit)
+        data = data[idx]
+    pts = data["point"]
+    return PreprocessedData(
+        pts, data["vector"], data["density"], data["index"],
+        pts.mean(axis=0), False)
+
+
+# ======================================================================
+# Core inference
+# ======================================================================
+
+def effective_sampling_config(config_id=None, sampling_method=None, voxel_table=None):
+    if config_id is None or sampling_method is None:
+        global_id, global_sampling = data_mask_module.get_current_config()
+        if config_id is None:
+            config_id = global_id
+        if sampling_method is None:
+            sampling_method = global_sampling
+    if voxel_table is None:
+        voxel_table = data_mask_module.VOXEL_SIZE_CONFIGS
+    voxel_sizes = voxel_table.get(config_id, voxel_table[min(voxel_table)])
+    return [float(value) for value in voxel_sizes], sampling_method
+
+
+@torch.no_grad()
+def process_single_pair(src_data, tgt_data, source_path, target_path,
+                        chain_pdb_path, model, cfg, config_id, sampling_method,
+                        output_dir=None, use_mask=False, masks=None,
+                        masks_save_path=None, mask_suffix=None,
+                        original_target_data=None, geometry_cache=None,
+                        inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
+                        tail_pipeline=None, voxel_table=None):
+    result = {
+        "source_file": os.path.basename(source_path),
+        "target_file": os.path.basename(target_path),
+        "chain_pdb": os.path.basename(chain_pdb_path) if chain_pdb_path else "None",
+        "config_id": config_id,
+        "sampling_method": sampling_method,
+        "error": "",
+        "overlap": None,
+        "ref_points": None,
+        "src_points": None,
+        "pred_pdb_path": None,
+        "use_mask": use_mask,
+        "masks_generated": 0,
+        "is_mask_file": tgt_data.is_mask_file,
+        "mask_suffix": mask_suffix,
+    }
+
+    try:
+        if use_mask and not tgt_data.is_mask_file:
+            if masks is None:
+                result["error"] = "Mask mode but no masks"
+                return result
+            result["masks_generated"] = len(masks)
+            result["masks_save_path"] = masks_save_path
+            result.update({"overlap": 0.0, "ref_points": len(tgt_data.points),
+                          "src_points": len(src_data.points)})
+            return result
+
+        # normalize
+        c_ref = tgt_data.centroid
+        c_src = src_data.centroid
+        ref_norm = tgt_data.points.copy()
+        src_norm = src_data.points.copy()
+        ref_norm[:, :3] -= c_ref
+        src_norm[:, :3] -= c_src
+
+        if original_target_data is not None and tgt_data.is_mask_file:
+            ref_for_ov = original_target_data.points.copy()
+            ref_for_ov[:, :3] -= c_ref
+            src_for_ov = src_norm.copy()
+        else:
+            ref_for_ov = ref_norm.copy()
+            src_for_ov = src_norm.copy()
+
+        scale = max(np.linalg.norm(ref_norm, axis=1).max(),
+                    np.linalg.norm(src_norm, axis=1).max()).astype(np.float32)
+
+        voxel_sizes, effective_sampling = effective_sampling_config(
+            config_id, sampling_method, voxel_table)
+        num_neighbors = cfg.backbone.num_neighbors
+        ref_features = torch.ones((ref_norm.shape[0], 1), dtype=torch.float32)
+        src_features = torch.ones((src_norm.shape[0], 1), dtype=torch.float32)
+
+        ref_acquired = acquire_geometry(
+            geometry_cache, torch.from_numpy(ref_norm.astype(np.float32)), ref_features,
+            voxel_sizes, effective_sampling, num_neighbors, centroid=c_ref)
+        src_acquired = acquire_geometry(
+            geometry_cache, torch.from_numpy(src_norm.astype(np.float32)), src_features,
+            voxel_sizes, effective_sampling, num_neighbors, centroid=c_src)
+        ref_geometry = ref_acquired.geometry
+        src_geometry = src_acquired.geometry
+
+        joint_reference = inference_mode == "joint"
+        data_dict = None
+        if joint_reference:
+            data_dict = join_geometries(
+                ref_geometry, src_geometry, scale=scale,
+                transform=torch.from_numpy(np.eye(4, dtype=np.float32)))
+
+        if joint_reference:
+            output_dict = model(data_dict, output_fields=INFERENCE_OUTPUT_FIELDS)
+        else:
+            ref_encoded = model.encode_cloud(ref_geometry, scale)
+            src_encoded = None
+            if encoding_cache is not None and encoding_cache.enabled:
+                src_encoded = encoding_cache.get(src_geometry, scale)
+            if src_encoded is None:
+                src_encoded = model.encode_cloud(src_geometry, scale)
+                if encoding_cache is not None and encoding_cache.enabled:
+                    encoding_cache.put(src_geometry, scale, src_encoded)
+            output_dict = model.register_pair(
+                ref_encoded, src_encoded, output_fields=INFERENCE_OUTPUT_FIELDS)
+
+        T_est = output_dict["estimated_transform"]
+        pred_R = T_est[:3, :3].cpu().numpy()
+        pred_t = T_est[:3, 3].cpu().numpy()
+        ref_count = len(output_dict["ref_points"])
+        src_count = len(output_dict["src_points"])
+
+        def finish_pair():
+            src4 = apply_transformation(src_for_ov, pred_R, pred_t)
+            _, _, corr = compute_overlap(ref_for_ov, src4, 1.5)
+            overlap_value = corr.shape[1] / len(ref_for_ov) \
+                if corr is not None and corr.size else 0.0
+            if chain_pdb_path and os.path.exists(chain_pdb_path):
+                try:
+                    pred_pdb = generate_output_pdb_path(
+                        source_path, config_id, sampling_method, output_dir, mask_suffix)
+                    t_corrected = pred_t + (c_ref.astype(np.float32) - c_src.astype(np.float32))
+                    transform_pdb(chain_pdb_path, pred_R, t_corrected, pred_pdb,
+                                  center=c_src.astype(np.float32))
+                    result["pred_pdb_path"] = pred_pdb
+                except Exception as e:
+                    log.warning("PDB transform failed: %s", e)
+            result.update({"overlap": overlap_value,
+                           "ref_points": ref_count, "src_points": src_count})
+
+        if tail_pipeline is not None:
+            tail_pipeline.submit(finish_pair)
+        else:
+            finish_pair()
+
+
+    except Exception as e:
+        result["error"] = str(e)
+        log.error("process_single_pair error: %s", e)
+
+    return result
+
+
+# ======================================================================
+# Mask generation
+# ======================================================================
+
+def generate_masks_once(src_points, ref_points, mask_params, output_dir,
+                        source_path, target_path):
+    """Generate spherical masks (called once, reused for all configs)."""
+    if not MASK_MODULE_AVAILABLE:
+        raise ImportError("sw_mask not available")
+
+    masks = generate_spherical_masks(
+        source_data=source_path, target_data=target_path,
+        mask_radius_factor=mask_params.get("mask_radius_factor", 1.35),
+        min_coverage=mask_params.get("min_coverage", 0.15),
+        min_point_distance_factor=mask_params.get("min_point_distance_factor", 0.33),
+        verbose=mask_params.get("verbose", True))
+
+    if len(masks) == 0:
+        raise ValueError("No valid masks generated")
+
+    masks_save_path = None
+    if output_dir and mask_params.get("save_masks", False):
+        temp_dir = os.path.join(output_dir, "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        save_masks(masks, temp_dir, save_individual_files=True)
+        masks_save_path = temp_dir
+
+    log.info("Generated %d spherical masks", len(masks))
+    return masks, masks_save_path
+
+
+# ======================================================================
+# CLI
+# ======================================================================
+
+def make_parser():
+    p = argparse.ArgumentParser(description="PARENet point cloud registration")
+    p.add_argument("--target", "-t", default=None)
+    p.add_argument("--source", "-s", default=None)
+    p.add_argument("--chain_pdb", "-c", default=None)
+    p.add_argument("--weights", "-w",
+                   default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "parenet", "weights", "epoch-18.pth.tar"))
+    p.add_argument("--output_dir", "-o", default=None)
+    p.add_argument("--seed", type=int, default=100000)
+    p.add_argument("--configs", default="all")
+    p.add_argument("--use_mask", action="store_true")
+    p.add_argument("--mask_radius_factor", type=float, default=1.35)
+    p.add_argument("--min_coverage", type=float, default=0.15)
+    p.add_argument("--min_point_distance_factor", type=float, default=0.33)
+    p.add_argument("--save_masks", action="store_true")
+    p.add_argument("--geometry-cache-mb", type=int, default=DEFAULT_GEOMETRY_CACHE_MB,
+                   help='Single-cloud CPU geometry cache capacity (MiB, 0 disables, default %d)'
+                        % DEFAULT_GEOMETRY_CACHE_MB)
+    p.add_argument("--tail-pipeline", dest="tail_pipeline", action="store_true",
+                   default=DEFAULT_TAIL_PIPELINE,
+                   help='Enable CPU tail pipelining; overlap postprocessing/writing with the next GPU registration')
+    p.add_argument("--no-tail-pipeline", dest="tail_pipeline", action="store_false",
+                   help='Disable CPU tail pipelining; process and write output in place')
+    p.add_argument("--hypothesis-chunk", type=int, default=DEFAULT_HYPOTHESIS_CHUNK,
+                   help='Hypothesis scoring chunk size (0 = unchunked, default %d)'
+                        % DEFAULT_HYPOTHESIS_CHUNK)
+    p.add_argument("--encoding-cache-mb", type=int, default=DEFAULT_ENCODING_CACHE_MB,
+                   help='Source encoding cache GPU budget (MiB, 0 disables; split mode only; default %d)'
+                        % DEFAULT_ENCODING_CACHE_MB)
+    p.add_argument("--inference-mode", choices=INFERENCE_MODES, default=DEFAULT_INFERENCE_MODE,
+                   help='Inference mode: joint = combined layout and forward (default); split = separate encoding and pair registration (requires TF32 disabled)')
+    p.add_argument("--allow-tf32", dest="allow_tf32", action="store_true", default=DEFAULT_ALLOW_TF32,
+                   help='Allow TF32 (default follows inference mode: joint enabled, split disabled)')
+    p.add_argument("--no-allow-tf32", dest="allow_tf32", action="store_false",
+                   help='Disable TF32; required by split mode')
+    p.add_argument("--server", action="store_true",
+                   help="persistent server mode: load model once, serve stdin requests")
+    return p
+
+
+# ======================================================================
+# Model singleton (load once, reuse across requests)
+# ======================================================================
+
+_MODEL = None
+_CFG = None
+
+
+def _get_model(weights, allow_tf32, hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK):
+    global _MODEL, _CFG
+    if _MODEL is None:
+        policy = apply_tf32_policy(allow_tf32)
+        _CFG = make_cfg()
+        _MODEL = create_model(_CFG, hypothesis_chunk=int(hypothesis_chunk)).cuda()
+        state = torch.load(weights)
+        _MODEL.load_state_dict(state["model"])
+        _MODEL.eval()
+        log.info("Model loaded (cached); TF32 policy: %s; hypothesis_chunk=%d",
+                 policy, int(hypothesis_chunk))
+    return _MODEL, _CFG
+
+
+# ======================================================================
+# Inference (one source->target fitting); uses the cached model
+# ======================================================================
+
+def run_inference(target, source, chain_pdb, output_dir, weights,
+                  use_mask=True, configs="all", seed=100000,
+                  mask_radius_factor=1.35, min_coverage=0.15,
+                  min_point_distance_factor=0.33, stop_file=None,
+                  geometry_cache=None, allow_tf32=DEFAULT_ALLOW_TF32,
+                  inference_mode=DEFAULT_INFERENCE_MODE, encoding_cache=None,
+                  hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK,
+                  tail_pipeline_enabled=DEFAULT_TAIL_PIPELINE, request_id=None):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if use_mask and not MASK_MODULE_AVAILABLE:
+        log.error("Mask mode requested but sw_mask not available")
+        return
+
+    model_net, cfg = _get_model(weights, effective_allow_tf32(inference_mode, allow_tf32),
+                                hypothesis_chunk)
+    os.makedirs(output_dir, exist_ok=True)
+    ledger = CandidateLedgerWriter(
+        output_dir, request_id or "server-%d" % os.getpid())
+
+    CONFIGS = VOXEL_SIZE_CONFIGS_MASK if use_mask else VOXEL_SIZE_CONFIGS_NORMAL
+    point_limit = 70000 if use_mask else 70000
+    if configs.lower() == "all":
+        config_ids = list(CONFIGS.keys())
+    else:
+        config_ids = [int(x) for x in configs.split(",")]
+
+    # preprocess
+    src_data = preprocess_point_cloud_data(source, point_limit=point_limit)
+    tgt_data = preprocess_point_cloud_data(target, point_limit=point_limit)
+
+    # masks
+    masks, masks_save_path, mask_data_list = None, None, []
+    if use_mask:
+        mask_params = {
+            "mask_radius_factor": mask_radius_factor,
+            "min_coverage": min_coverage,
+            "min_point_distance_factor": min_point_distance_factor,
+            "verbose": True, "save_masks": True,
+        }
+        masks, masks_save_path = generate_masks_once(
+            source, target, mask_params, output_dir, source, target)
+        for mf in find_mask_files(os.path.join(output_dir, "temp")):
+            try:
+                md = preprocess_point_cloud_data(mf, point_limit=None, is_mask_file=True)
+                mask_data_list.append((mf, md))
+            except Exception:
+                continue
+
+    def _stopped():
+        return stop_file is not None and os.path.exists(stop_file)
+
+    # inference
+    all_results = []
+    tail_pipeline = TailPipeline(enabled=tail_pipeline_enabled, name="parenet-tail")
+
+    def _drain_tail(stage):
+        tail_pipeline.wait()
+
+    ledger_errors = {"count": 0, "first": None}
+    skipped_mask_errors = 0
+
+    def _publish(candidate_id, results, name=None, overlap=None, source=None,
+                 mask_level=False):
+        nonlocal skipped_mask_errors
+        errors = [r.get("error") for r in results if r.get("error")]
+        if name and os.path.exists(name):
+            ledger.publish(candidate_id, "ok", name=name, overlap=overlap,
+                           source=source)
+            return
+        if errors:
+            if mask_level:
+                skipped_mask_errors += 1
+                ledger.publish(candidate_id, "error", source=source,
+                               error=errors[0], reason=MASK_ERROR_REASON)
+            else:
+                ledger_errors["count"] += 1
+                if ledger_errors["first"] is None:
+                    ledger_errors["first"] = errors[0]
+                ledger.publish(candidate_id, "error", source=source,
+                               error=errors[0])
+            return
+        ledger.publish(candidate_id, "filtered", source=source,
+                       reason="no valid prediction")
+
+    failure = None
+    try:
+        if use_mask and mask_data_list:
+            optimal_results = []
+            for mask_index, (mask_file, mask_data) in enumerate(mask_data_list):
+                if _stopped():
+                    break
+                mask_name = os.path.basename(mask_file)
+                mask_results = []
+                for cid in config_ids:
+                    if _stopped():
+                        break
+                    for sm in ["voxel", "fps"]:
+                        try:
+                            suffix = os.path.splitext(mask_name)[0]
+                            if suffix.startswith("mask"):
+                                suffix = suffix[4:]
+                            suffix = suffix[:10]
+                            r = process_single_pair(
+                                src_data, mask_data, source, mask_file,
+                                chain_pdb, model_net, cfg, cid, sm,
+                                output_dir, use_mask=False,
+                                mask_suffix=suffix, original_target_data=tgt_data,
+                                geometry_cache=geometry_cache,
+                                inference_mode=inference_mode,
+                                encoding_cache=encoding_cache,
+                                tail_pipeline=tail_pipeline,
+                                voxel_table=CONFIGS)
+                            mask_results.append(r)
+                            all_results.append(r)
+                        except Exception as e:
+                            log.error("Config %d-%s crashed: %s", cid, sm, e)
+                            failure_record = {"error": str(e), "config_id": cid,
+                                              "sampling_method": sm}
+                            mask_results.append(failure_record)
+                            all_results.append(failure_record)
+                _drain_tail("mask_best")
+                best = process_single_mask_optimally(mask_results)
+                _publish(mask_index, mask_results,
+                         name=(best or {}).get("pred_pdb_path"),
+                         overlap=(best or {}).get("overlap"),
+                         source={"mask": mask_name,
+                                 "config": (best or {}).get("config_id"),
+                                 "sampling": (best or {}).get("sampling_method")},
+                         mask_level=True)
+                if best:
+                    optimal_results.append(best)
+
+            _drain_tail("sort")
+            optimal_results.sort(key=lambda x: x.get("overlap") or 0, reverse=True)
+            log.info("Optimal results per mask:")
+            for i, r in enumerate(optimal_results, 1):
+                pdb = os.path.basename(r.get("pred_pdb_path", "N/A"))
+                log.info("  %d. %s overlap=%.6f", i, pdb, r.get("overlap", 0))
+        else:
+            logged = 0
+            pending = []
+            for cid in config_ids:
+                if _stopped():
+                    break
+                for sm in ["voxel", "fps"]:
+                    try:
+                        r = process_single_pair(
+                            src_data, tgt_data, source, target,
+                            chain_pdb, model_net, cfg, cid, sm,
+                            output_dir, use_mask=use_mask,
+                            masks=masks, masks_save_path=masks_save_path,
+                            geometry_cache=geometry_cache,
+                            inference_mode=inference_mode,
+                            encoding_cache=encoding_cache,
+                            tail_pipeline=tail_pipeline,
+                            voxel_table=CONFIGS)
+                        all_results.append(r)
+                    except Exception as e:
+                        log.error("Config %d-%s crashed: %s", cid, sm, e)
+                        r = {"error": str(e)}
+                    pending.append(({"config": cid, "sampling": sm}, r))
+                _drain_tail("ranking")
+                while logged < len(all_results):
+                    done = all_results[logged]
+                    logged += 1
+                    if not done.get("error") and done.get("overlap") is not None:
+                        log.info("Config %s-%s: overlap=%.6f", done.get("config_id"),
+                                 done.get("sampling_method"), done["overlap"])
+
+            _drain_tail("rename")
+            successful = [r for r in all_results if not r.get("error")
+                          and r.get("overlap") is not None]
+            if successful:
+                rename_pdb_files_by_ranking(successful)
+            for candidate_id, (candidate_source, result) in enumerate(pending):
+                _publish(candidate_id, [result], name=result.get("pred_pdb_path"),
+                         overlap=result.get("overlap"), source=candidate_source)
+
+        _drain_tail("summary")
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            tail_pipeline.close()
+        except Exception as e:
+            log.error('Tail pipeline shutdown failed: %s', e)
+        try:
+            if failure is not None:
+                ledger.finish("error", error="%s: %s" % (type(failure).__name__, failure))
+            elif _stopped():
+                ledger.finish("cancelled")
+            elif ledger_errors["count"]:
+                ledger.finish("error",
+                              error='%d candidates failed; first error: %s'
+                                    % (ledger_errors["count"], ledger_errors["first"]))
+            else:
+                ledger.finish("ok")
+        except Exception as e:
+            log.error('Failed to write ledger end record: %s', e)
+    ok = [r for r in all_results if not r.get("error") and r.get("overlap") is not None]
+    fail = [r for r in all_results if r.get("error")]
+    log.info("Total: %d, Success: %d, Failed: %d", len(all_results), len(ok), len(fail))
+    if ok:
+        best = max(ok, key=lambda r: r["overlap"])
+        pred = best.get("pred_pdb_path")
+        log.info("Best overlap: %.6f (%s)", best["overlap"],
+                 os.path.basename(pred) if pred else "N/A")
+
+
+# ======================================================================
+# Persistent server: load model once, serve stdin JSON requests
+# ======================================================================
+
+def _server_loop(weights, geometry_cache_mb=DEFAULT_GEOMETRY_CACHE_MB,
+                 inference_mode=DEFAULT_INFERENCE_MODE, allow_tf32=DEFAULT_ALLOW_TF32,
+                 encoding_cache_mb=DEFAULT_ENCODING_CACHE_MB,
+                 hypothesis_chunk=DEFAULT_HYPOTHESIS_CHUNK,
+                 tail_pipeline=DEFAULT_TAIL_PIPELINE):
+    resolved_tf32 = effective_allow_tf32(inference_mode, allow_tf32)
+    model, _cfg = _get_model(weights, resolved_tf32, hypothesis_chunk)  # preload once
+    geometry_cache = GeometryCache(int(geometry_cache_mb) * 1024 * 1024) \
+        if geometry_cache_mb else None
+    encoding_cache = None
+    if inference_mode == "split" and encoding_cache_mb:
+        fingerprint = model_fingerprint(model)
+        encoding_cache = EncodingCache(int(encoding_cache_mb) * 1024 * 1024, fingerprint)
+        log.info("Encoding cache enabled: %d MiB, model fingerprint %s…",
+                 encoding_cache_mb, fingerprint[:12])
+    log.info("PARENet server ready (pid=%d, geometry_cache_mb=%s, inference_mode=%s, "
+             "allow_tf32=%s, encoding_cache_mb=%s, hypothesis_chunk=%d)",
+             os.getpid(), geometry_cache_mb, inference_mode, resolved_tf32,
+             encoding_cache_mb if encoding_cache is not None else 0, int(hypothesis_chunk))
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except Exception as e:
+            log.error("bad request: %s", e)
+            continue
+        output_dir = req["output_dir"]
+        done_file = os.path.join(output_dir, "_PARENET_DONE")
+        stop_file = os.path.join(output_dir, "_PARENET_STOP")
+        try:
+            run_inference(
+                target=req["target"], source=req["source"],
+                chain_pdb=req.get("chain_pdb"), output_dir=output_dir,
+                weights=weights, use_mask=req.get("use_mask", True),
+                configs=req.get("configs", "all"),
+                seed=req.get("seed", 100000),
+                mask_radius_factor=req.get("mask_radius_factor", 1.35),
+                min_coverage=req.get("min_coverage", 0.15),
+                min_point_distance_factor=req.get("min_point_distance_factor", 0.33),
+                stop_file=stop_file, geometry_cache=geometry_cache,
+                allow_tf32=resolved_tf32,
+                inference_mode=req.get("inference_mode") or inference_mode,
+                encoding_cache=encoding_cache, hypothesis_chunk=hypothesis_chunk,
+                tail_pipeline_enabled=tail_pipeline,
+                request_id=req.get("request_id"))
+        except Exception as e:
+            log.error("request failed: %s", e)
+        finally:
+            try:
+                with open(done_file, "w") as f:
+                    f.write("done\n")
+            except Exception:
+                pass
+
+
+def main():
+    args = make_parser().parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+    if args.server:
+        _server_loop(args.weights, args.geometry_cache_mb, args.inference_mode,
+                     args.allow_tf32, args.encoding_cache_mb, args.hypothesis_chunk,
+                     args.tail_pipeline)
+        return
+
+    # single-run CLI (backward compatible)
+    if not args.target or not args.source:
+        log.error("--target and --source are required (or use --server)")
+        return
+    output_dir = args.output_dir or os.path.dirname(args.source)
+    geometry_cache = GeometryCache(args.geometry_cache_mb * 1024 * 1024) \
+        if args.geometry_cache_mb else None
+    encoding_cache = None
+    if args.inference_mode == "split" and args.encoding_cache_mb:
+        resolved_tf32 = effective_allow_tf32(args.inference_mode, args.allow_tf32)
+        model_net, _cfg = _get_model(args.weights, resolved_tf32, args.hypothesis_chunk)
+        encoding_cache = EncodingCache(args.encoding_cache_mb * 1024 * 1024,
+                                       model_fingerprint(model_net))
+    run_inference(
+        target=args.target, source=args.source, chain_pdb=args.chain_pdb,
+        output_dir=output_dir, weights=args.weights, use_mask=args.use_mask,
+        configs=args.configs, seed=args.seed,
+        mask_radius_factor=args.mask_radius_factor, min_coverage=args.min_coverage,
+        min_point_distance_factor=args.min_point_distance_factor,
+        geometry_cache=geometry_cache, allow_tf32=args.allow_tf32,
+        inference_mode=args.inference_mode, encoding_cache=encoding_cache,
+        hypothesis_chunk=args.hypothesis_chunk,
+        tail_pipeline_enabled=args.tail_pipeline)
+
+
+if __name__ == "__main__":
+    main()

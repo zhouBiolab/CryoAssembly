@@ -13,7 +13,7 @@
 
 [English](README.md) · **简体中文**
 
-[安装](#installation) · [使用](#usage) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
+[安装](#installation) · [使用](#usage) · [示例](#examples) · [方法](#method) · [常见问题](#faq) · [引用](#citation) · [许可](#license)
 
 </div>
 
@@ -235,6 +235,12 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 使用 `python main.py --help` 查看完整选项。
 
 </details>
+
+<a id="examples"></a>
+
+## 示例
+
+[examples/](examples/README.md) 提供 **8dme**、**7ptt** 和 **8fzc** 三组输入包，以及解压方式、随附参数和运行命令。每个包仅包含 PDB 结构、MRC 密度图和两个参数 TXT 文件。
 
 <a id="method"></a>
 

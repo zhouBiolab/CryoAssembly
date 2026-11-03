@@ -87,3 +87,8 @@ SOURCE_POINT_CLOUD_EXACT_CACHE_TASKS.md
 /.cache/
 *.map
 *.ccp4
+
+# Extracted example inputs and locally generated outputs
+/examples/8dme/
+/examples/7ptt/
+/examples/8fzc/

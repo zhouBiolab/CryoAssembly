@@ -13,7 +13,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Installation](#installation) · [Usage](#usage) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
+[Installation](#installation) · [Usage](#usage) · [Examples](#examples) · [Method](#method) · [FAQ](#faq) · [Citation](#citation) · [License](#license)
 
 </div>
 
@@ -235,6 +235,12 @@ The effective hypothesis-chunk default is 64. A CLI value overrides `--runtime-c
 Use `python main.py --help` for all options.
 
 </details>
+
+<a id="examples"></a>
+
+## Examples
+
+Input packages for **8dme**, **7ptt** and **8fzc** are available in [examples/](examples/README.md), with extraction instructions, supplied parameters and run commands. Each package contains only PDB structures, an MRC map and the two parameter TXT files.
 
 <a id="method"></a>
 

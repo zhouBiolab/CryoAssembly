@@ -240,7 +240,7 @@ Use `python main.py --help` for all options.
 
 ## Examples
 
-Input packages for **8dme**, **7ptt** and **8fzc** are available in [examples/](examples/README.md), with extraction instructions, supplied parameters and run commands. Each package contains only PDB structures, an MRC map and the two parameter TXT files.
+Input packages for **8dme**, **7ptt** and **8fzc** are available in [examples/](examples/). Each package contains only PDB structures, an MRC map and the two parameter TXT files.
 
 <a id="method"></a>
 

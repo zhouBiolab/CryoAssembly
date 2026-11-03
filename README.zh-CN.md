@@ -240,7 +240,7 @@ python main.py data_dir --complex-domain-opt --homo-chain-refine --log
 
 ## 示例
 
-[examples/](examples/README.md) 提供 **8dme**、**7ptt** 和 **8fzc** 三组输入包，以及解压方式、随附参数和运行命令。每个包仅包含 PDB 结构、MRC 密度图和两个参数 TXT 文件。
+[examples/](examples/) 提供 **8dme**、**7ptt** 和 **8fzc** 三组输入包。每个包仅包含 PDB 结构、MRC 密度图和两个参数 TXT 文件。
 
 <a id="method"></a>
 
